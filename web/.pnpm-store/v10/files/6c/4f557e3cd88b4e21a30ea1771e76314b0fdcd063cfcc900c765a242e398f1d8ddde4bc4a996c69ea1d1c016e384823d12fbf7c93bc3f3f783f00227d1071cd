@@ -1,0 +1,163 @@
+import { RegisterClass } from "../../../../Misc/typeStore.js";
+import { NodeParticleBlockConnectionPointTypes } from "../../Enums/nodeParticleBlockConnectionPointTypes.js";
+import { NodeParticleBlock } from "../../nodeParticleBlock.js";
+import { RandomRange } from "../../../../Maths/math.scalar.functions.js";
+import { TmpVectors, Vector3 } from "../../../../Maths/math.vector.js";
+/**
+ * Block used to provide a flow of particles emitted from a cone shape.
+ */
+export class ConeShapeBlock extends NodeParticleBlock {
+    /**
+     * Create a new ConeShapeBlock
+     * @param name defines the block name
+     */
+    constructor(name) {
+        super(name);
+        this.registerInput("particle", NodeParticleBlockConnectionPointTypes.Particle);
+        this.registerInput("radius", NodeParticleBlockConnectionPointTypes.Float, true, 1);
+        this.registerInput("angle", NodeParticleBlockConnectionPointTypes.Float, true, Math.PI);
+        this.registerInput("radiusRange", NodeParticleBlockConnectionPointTypes.Float, true, 1);
+        this.registerInput("heightRange", NodeParticleBlockConnectionPointTypes.Float, true, 1);
+        this.registerInput("emitFromSpawnPointOnly", NodeParticleBlockConnectionPointTypes.Int, true, 0);
+        this.registerInput("directionRandomizer", NodeParticleBlockConnectionPointTypes.Float, true, 0);
+        this.registerOutput("output", NodeParticleBlockConnectionPointTypes.Particle);
+    }
+    /**
+     * Gets the current class name
+     * @returns the class name
+     */
+    getClassName() {
+        return "ConeShapeBlock";
+    }
+    /**
+     * Gets the particle input component
+     */
+    get particle() {
+        return this._inputs[0];
+    }
+    /**
+     * Gets the radius input component
+     */
+    get radius() {
+        return this._inputs[1];
+    }
+    /**
+     * Gets the angle input component
+     */
+    get angle() {
+        return this._inputs[2];
+    }
+    /**
+     * Gets the radiusRange input component
+     */
+    get radiusRange() {
+        return this._inputs[3];
+    }
+    /**
+     * Gets the heightRange input component
+     */
+    get heightRange() {
+        return this._inputs[4];
+    }
+    /**
+     * Gets the emitFromSpawnPointOnly input component
+     */
+    get emitFromSpawnPointOnly() {
+        return this._inputs[5];
+    }
+    /**
+     * Gets the directionRandomizer input component
+     */
+    get directionRandomizer() {
+        return this._inputs[6];
+    }
+    /**
+     * Gets the output component
+     */
+    get output() {
+        return this._outputs[0];
+    }
+    /**
+     * Builds the block
+     * @param state defines the build state
+     */
+    _build(state) {
+        const system = this.particle.getConnectedValue(state);
+        system._directionCreation.process = (particle) => {
+            state.particleContext = particle;
+            state.systemContext = system;
+            // Connected values
+            let directionRandomizer = this.directionRandomizer.getConnectedValue(state);
+            directionRandomizer = Math.max(0, Math.min(directionRandomizer, 1));
+            // Calculate create direction logic
+            if (system.isLocal) {
+                TmpVectors.Vector3[0].copyFrom(particle.position).normalize();
+            }
+            else {
+                particle.position.subtractToRef(state.emitterWorldMatrix.getTranslation(), TmpVectors.Vector3[0]).normalize();
+            }
+            const randX = RandomRange(0, directionRandomizer);
+            const randY = RandomRange(0, directionRandomizer);
+            const randZ = RandomRange(0, directionRandomizer);
+            const directionToUpdate = new Vector3();
+            directionToUpdate.x = TmpVectors.Vector3[0].x + randX;
+            directionToUpdate.y = TmpVectors.Vector3[0].y + randY;
+            directionToUpdate.z = TmpVectors.Vector3[0].z + randZ;
+            directionToUpdate.normalize();
+            if (system.isLocal) {
+                particle.direction.copyFromFloats(directionToUpdate.x, directionToUpdate.y, directionToUpdate.z);
+            }
+            else {
+                Vector3.TransformNormalFromFloatsToRef(directionToUpdate.x, directionToUpdate.y, directionToUpdate.z, state.emitterWorldMatrix, particle.direction);
+            }
+            particle._initialDirection = particle.direction.clone();
+        };
+        system._positionCreation.process = (particle) => {
+            state.particleContext = particle;
+            state.systemContext = system;
+            // Connected values
+            const radius = this.radius.getConnectedValue(state);
+            const angle = this.angle.getConnectedValue(state);
+            let radiusRange = this.radiusRange.getConnectedValue(state);
+            radiusRange = Math.max(0, Math.min(radiusRange, 1));
+            let heightRange = this.heightRange.getConnectedValue(state);
+            heightRange = Math.max(0, Math.min(heightRange, 1));
+            const emitFromSpawnPointOnly = this.emitFromSpawnPointOnly.getConnectedValue(state) !== 0;
+            // Calculate position creation logic
+            let h;
+            if (!emitFromSpawnPointOnly) {
+                h = RandomRange(0, heightRange);
+                // Better distribution in a cone at normal angles.
+                h = 1 - h * h;
+            }
+            else {
+                h = 0.0001;
+            }
+            let newRadius = radius - RandomRange(0, radius * radiusRange);
+            newRadius = newRadius * h;
+            const s = RandomRange(0, Math.PI * 2);
+            const height = this._calculateHeight(angle, radius);
+            const randX = newRadius * Math.sin(s);
+            const randZ = newRadius * Math.cos(s);
+            const randY = h * height;
+            if (system.isLocal) {
+                particle.position.copyFromFloats(randX, randY, randZ);
+                particle.position.addInPlace(state.emitterPosition);
+            }
+            else {
+                Vector3.TransformCoordinatesFromFloatsToRef(randX, randY, randZ, state.emitterWorldMatrix, particle.position);
+            }
+        };
+        this.output._storedValue = system;
+    }
+    _calculateHeight(angle, radius) {
+        if (angle !== 0) {
+            return radius / Math.tan(angle / 2);
+        }
+        else {
+            return 1;
+        }
+    }
+}
+RegisterClass("BABYLON.ConeShapeBlock", ConeShapeBlock);
+//# sourceMappingURL=coneShapeBlock.js.map

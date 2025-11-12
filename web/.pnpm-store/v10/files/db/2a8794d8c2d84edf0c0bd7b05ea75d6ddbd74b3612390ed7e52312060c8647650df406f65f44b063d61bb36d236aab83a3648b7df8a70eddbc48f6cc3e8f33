@@ -1,0 +1,19 @@
+// Do not edit.
+import { ShaderStore } from "../Engines/shaderStore.js";
+import "./ShadersInclude/sceneUboDeclaration.js";
+import "./ShadersInclude/meshUboDeclaration.js";
+import "./ShadersInclude/gaussianSplatting.js";
+const name = "gaussianSplattingDepthVertexShader";
+const shader = `#include<sceneUboDeclaration>
+#include<meshUboDeclaration>
+attribute splatIndex: f32;attribute position: vec2f;uniform invViewport: vec2f;uniform dataTextureSize: vec2f;uniform focal: vec2f;uniform kernelSize: f32;var covariancesATexture: texture_2d<f32>;var covariancesBTexture: texture_2d<f32>;var centersTexture: texture_2d<f32>;var colorsTexture: texture_2d<f32>;varying vPosition: vec2f;varying vColor: vec4f;
+#include<gaussianSplatting>
+@vertex
+fn main(input : VertexInputs)->FragmentInputs {var splat: Splat=readSplat(input.splatIndex,uniforms.dataTextureSize);var covA: vec3f=splat.covA.xyz;var covB: vec3f=vec3f(splat.covA.w,splat.covB.xy);let worldPos: vec4f=mesh.world*vec4f(splat.center.xyz,1.0);vertexOutputs.vPosition=input.position;vertexOutputs.vColor=splat.color;vertexOutputs.position=gaussianSplatting(input.position,worldPos.xyz,vec2f(1.0,1.0),covA,covB,mesh.world,scene.view,scene.projection,uniforms.focal,uniforms.invViewport,uniforms.kernelSize);}`;
+// Sideeffect
+if (!ShaderStore.ShadersStoreWGSL[name]) {
+    ShaderStore.ShadersStoreWGSL[name] = shader;
+}
+/** @internal */
+export const gaussianSplattingDepthVertexShaderWGSL = { name, shader };
+//# sourceMappingURL=gaussianSplattingDepth.vertex.js.map
