@@ -113,6 +113,20 @@ function Room() {
         setRoomCode(connectedRoomCode);
         console.log('[Room] Connected with player ID:', connectedMyId, 'roomCode:', connectedRoomCode);
 
+        // Initialize local player state from world state or fallback
+        const initialState = worldRef.current.players[connectedMyId] ?? createFallbackPlayer();
+        console.log('[Room] Initial player state:', initialState);
+        localPlayerStateRef.current = initialState;
+
+        // Immediately add local player to world state for display
+        setWorld((prev) => {
+          const updated = { ...prev };
+          if (!updated.players) updated.players = {};
+          updated.players[connectedMyId] = initialState;
+          console.log('[Room] Added local player to world state:', Object.keys(updated.players));
+          return updated;
+        });
+
         unsubscribe = subscribeState((state) => {
           console.log('[Room] State update received:', state);
           console.log('[Room] Players in state:', Object.keys(state.players || {}));
@@ -128,10 +142,10 @@ function Room() {
           setWorld(mergedState);
         });
 
-        // Initialize local player state from world state or fallback
-        const initialState = worldRef.current.players[connectedMyId] ?? createFallbackPlayer();
-        console.log('[Room] Initial player state:', initialState);
-        localPlayerStateRef.current = initialState;
+        // Write initial state immediately to ensure we appear in the room
+        writeMyState(initialState).catch((error) => {
+          console.error('[Room] Failed to write initial state', error);
+        });
 
         stopWriteLoop = startWriteLoop(() => {
           return localPlayerStateRef.current ?? createFallbackPlayer();
@@ -319,12 +333,30 @@ function Room() {
 
       <div className="relative flex-1">
         <SceneRoot>
-          {players.map(([id, playerState]) => (
-            <Avatar key={id} playerId={id} player={playerState} isLocal={id === myId} />
-          ))}
-          {myId !== 'none' && !world.players[myId] ? (
-            <Avatar key="local-fallback" playerId={myId} player={createFallbackPlayer()} isLocal={true} />
-          ) : null}
+          {players.length > 0 ? (
+            players.map(([id, playerState]) => {
+              console.log('[Room] Rendering Avatar for player:', id, 'state:', playerState);
+              return (
+                <Avatar 
+                  key={id} 
+                  playerId={id} 
+                  player={playerState} 
+                  isLocal={id === myId}
+                  videoElement={id === myId ? videoRef.current || undefined : undefined}
+                />
+              );
+            })
+          ) : (
+            myId !== 'none' && (
+              <Avatar 
+                key="local-fallback" 
+                playerId={myId} 
+                player={createFallbackPlayer()} 
+                isLocal={true}
+                videoElement={videoRef.current || undefined}
+              />
+            )
+          )}
         </SceneRoot>
         <Joystick />
       </div>

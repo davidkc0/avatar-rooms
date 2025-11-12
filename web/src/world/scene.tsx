@@ -1,5 +1,4 @@
 import '@babylonjs/core/Loading/loadingScreen';
-import '@babylonjs/loaders/glTF';
 
 import {
   ArcRotateCamera,

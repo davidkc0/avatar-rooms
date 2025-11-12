@@ -118,11 +118,27 @@ export function getLastWriteAt() {
 
 export function subscribeState(cb: (s: WorldState) => void): () => void {
   let cleanup: (() => void) | null = null;
+  let intervalId: ReturnType<typeof setInterval> | null = null;
   
   getPlayroomkit().then((pk) => {
-    cleanup = pk.onStateChange((ns) => {
-      cb((ns as WorldState) ?? { players: {} });
-    });
+    // Try onStateChange first, fallback to polling if not available
+    if (typeof pk.onStateChange === 'function') {
+      cleanup = pk.onStateChange((ns) => {
+        cb((ns as WorldState) ?? { players: {} });
+      });
+    } else {
+      // Fallback to polling every 100ms
+      console.warn('[playroom] onStateChange not available, using polling');
+      let lastState: any = null;
+      intervalId = setInterval(() => {
+        const currentState = pk.getState() as WorldState;
+        // Only call callback if state changed
+        if (JSON.stringify(currentState) !== JSON.stringify(lastState)) {
+          lastState = currentState;
+          cb(currentState ?? { players: {} });
+        }
+      }, 100);
+    }
     
     // Also call with initial state
     const initialState = (pk.getState() as WorldState) ?? { players: {} };
@@ -135,6 +151,10 @@ export function subscribeState(cb: (s: WorldState) => void): () => void {
     if (cleanup) {
       cleanup();
       cleanup = null;
+    }
+    if (intervalId) {
+      clearInterval(intervalId);
+      intervalId = null;
     }
   };
 }

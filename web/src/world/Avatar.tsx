@@ -1,120 +1,20 @@
 import {
-  AnimationPropertiesOverride,
-  Animatable,
   Mesh,
   Quaternion,
   Scene,
-  Skeleton,
   TransformNode,
   Vector3,
 } from '@babylonjs/core';
 import { useEffect, useRef } from 'react';
-import { loadRpmAvatar } from '../avatars/rpmLoader';
+import { createSimpleAvatar, SimpleAvatar } from '../avatars/simpleAvatar';
 import { PlayerState } from '../multiplayer/playroom';
 import { useScene } from './scene';
-
-type AvatarTemplate = {
-  mesh: TransformNode;
-  morphTargets: Record<string, number>;
-  headBoneName: string | null;
-  idleRangeName?: string;
-  walkRangeName?: string;
-};
-
-type AvatarInstance = {
-  root: TransformNode;
-  skeleton: Skeleton | null;
-  headBone: ReturnType<Skeleton['getBoneByName']> | null;
-  blendMeshes: Mesh[];
-  morphTargets: Record<string, number>;
-  lastBlend: Record<string, number>;
-  currentAnim: Animatable | null;
-  currentAnimState: PlayerState['anim'] | null;
-  idleRangeName?: string;
-  walkRangeName?: string;
-};
-
-const templateCache = new WeakMap<
-  Scene,
-  Promise<AvatarTemplate>
->();
-
-const clamp01 = (value: number) =>
-  Math.min(1, Math.max(0, value));
-
-const findSkeleton = (root: TransformNode): Skeleton | null => {
-  const meshWithSkeleton = root
-    .getChildMeshes(false)
-    .find((child) => child.skeleton);
-  return meshWithSkeleton?.skeleton ?? null;
-};
-
-const gatherBlendMeshes = (root: TransformNode): Mesh[] =>
-  root
-    .getChildMeshes(false)
-    .filter(
-      (child): child is Mesh =>
-        child instanceof Mesh && !!child.morphTargetManager
-    );
-
-const findAnimationRangeName = (
-  skeleton: Skeleton | null,
-  keyword: string
-) => {
-  if (!skeleton || !skeleton.getAnimationRanges) {
-    return undefined;
-  }
-
-  const ranges = skeleton.getAnimationRanges() ?? [];
-  const match = ranges.find((range) =>
-    range.name.toLowerCase().includes(keyword)
-  );
-  return match?.name;
-};
-
-const loadTemplate = async (
-  scene: Scene
-): Promise<AvatarTemplate> => {
-  let promise = templateCache.get(scene);
-  if (promise) {
-    return promise;
-  }
-
-  promise = (async () => {
-    const avatar = await loadRpmAvatar(scene);
-    avatar.mesh.setEnabled(false);
-    avatar.mesh.isVisible = false;
-    avatar.mesh.getChildMeshes(false).forEach((child) => {
-      child.isVisible = false;
-      child.isPickable = false;
-    });
-
-    avatar.animationGroups.forEach((group) => {
-      group.stop();
-    });
-
-    const skeleton = findSkeleton(avatar.mesh);
-
-    const idleRangeName = findAnimationRangeName(skeleton, 'idle');
-    const walkRangeName = findAnimationRangeName(skeleton, 'walk');
-
-    return {
-      mesh: avatar.mesh,
-      morphTargets: avatar.morphTargets,
-      headBoneName: avatar.headBone?.name ?? null,
-      idleRangeName,
-      walkRangeName,
-    };
-  })();
-
-  templateCache.set(scene, promise);
-  return promise;
-};
 
 type AvatarProps = {
   playerId: string;
   player: PlayerState;
   isLocal?: boolean;
+  videoElement?: HTMLVideoElement;
 };
 
 const INTERPOLATION_TIME = 0.12; // 120ms
@@ -125,9 +25,9 @@ type InterpolatedState = {
   headQ: Quaternion;
 };
 
-export function Avatar({ playerId, player, isLocal = false }: AvatarProps) {
+export function Avatar({ playerId, player, isLocal = false, videoElement }: AvatarProps) {
   const { scene } = useScene();
-  const instanceRef = useRef<AvatarInstance | null>(null);
+  const avatarRef = useRef<SimpleAvatar | null>(null);
   const playerStateRef = useRef(player);
   const interpolatedRef = useRef<InterpolatedState | null>(null);
   const targetStateRef = useRef<PlayerState>(player);
@@ -135,75 +35,41 @@ export function Avatar({ playerId, player, isLocal = false }: AvatarProps) {
   playerStateRef.current = player;
   targetStateRef.current = player;
 
+  // Create avatar on mount
   useEffect(() => {
-    let disposed = false;
-    let template: AvatarTemplate;
-
-    const setup = async () => {
-      template = await loadTemplate(scene);
-      if (disposed) {
-        return;
-      }
-
-      const clone = template.mesh.clone(
-        `avatar-${playerId}`,
-        null,
-        true
-      ) as TransformNode;
-
-      clone.setEnabled(true);
-      clone.isVisible = true;
-      clone.position = new Vector3();
-
-      const skeleton = findSkeleton(clone);
-
-      const headBone =
-        (template.headBoneName && skeleton
-          ? skeleton.getBoneByName(template.headBoneName)
-          : null) ?? null;
-
-      const blendMeshes = gatherBlendMeshes(clone);
-
-      instanceRef.current = {
-        root: clone,
-        skeleton,
-        headBone,
-        blendMeshes,
-        morphTargets: template.morphTargets,
-        lastBlend: {},
-        currentAnim: null,
-        currentAnimState: null,
-        idleRangeName: template.idleRangeName,
-        walkRangeName: template.walkRangeName,
-      };
-
-      // Initialize interpolated state
-      interpolatedRef.current = {
-        pos: new Vector3(player.pos.x, player.pos.y, player.pos.z),
-        rotY: player.rotY,
-        headQ: Quaternion.FromArray(player.head.q),
-      };
+    console.log('[Avatar] Creating avatar for player:', playerId, 'isLocal:', isLocal);
+    
+    // Only use video element for local player (and only if it's ready)
+    const video = isLocal && videoElement ? videoElement : undefined;
+    const avatar = createSimpleAvatar(scene, video);
+    
+    avatar.root.position = new Vector3(player.pos.x, player.pos.y, player.pos.z);
+    avatar.root.rotation.y = player.rotY;
+    
+    // Initialize interpolated state
+    interpolatedRef.current = {
+      pos: new Vector3(player.pos.x, player.pos.y, player.pos.z),
+      rotY: player.rotY,
+      headQ: Quaternion.FromArray(player.head.q),
     };
-
-    setup().catch((error) => {
-      console.error('[Avatar] Failed to load avatar', error);
-    });
+    
+    avatarRef.current = avatar;
+    console.log('[Avatar] Avatar created for player:', playerId, 'with video:', !!video);
 
     return () => {
-      disposed = true;
-      const instance = instanceRef.current;
-      if (instance) {
-        instance.currentAnim?.stop();
-        instance.root.dispose();
+      console.log('[Avatar] Disposing avatar for player:', playerId);
+      if (avatarRef.current) {
+        avatarRef.current.root.dispose();
+        avatarRef.current = null;
       }
-      instanceRef.current = null;
     };
-  }, [scene, playerId]);
+  }, [scene, playerId, isLocal, videoElement]);
 
+  // Update avatar position, rotation, and head rotation each frame
   useEffect(() => {
     const observer = scene.onBeforeRenderObservable.add(() => {
-      const instance = instanceRef.current;
-      if (!instance || !interpolatedRef.current) {
+      const avatar = avatarRef.current;
+      if (!avatar || !interpolatedRef.current) {
         return;
       }
 
@@ -225,8 +91,8 @@ export function Avatar({ playerId, player, isLocal = false }: AvatarProps) {
 
       if (isLocal) {
         // Direct updates for local player
-        instance.root.position.set(state.pos.x, state.pos.y, state.pos.z);
-        instance.root.rotation.y = state.rotY;
+        avatar.root.position.set(state.pos.x, state.pos.y, state.pos.z);
+        avatar.root.rotation.y = state.rotY;
         interpolated.pos.set(state.pos.x, state.pos.y, state.pos.z);
         interpolated.rotY = state.rotY;
       } else {
@@ -240,16 +106,13 @@ export function Avatar({ playerId, player, isLocal = false }: AvatarProps) {
             Math.PI) *
           lerpFactor;
 
-        instance.root.position.copyFrom(interpolated.pos);
-        instance.root.rotation.y = interpolated.rotY;
+        avatar.root.position.copyFrom(interpolated.pos);
+        avatar.root.rotation.y = interpolated.rotY;
       }
 
-      // Head rotation (always interpolate for smoothness)
-      if (instance.headBone && state.head?.q) {
+      // Head rotation (apply quaternion to head mesh)
+      if (state.head?.q) {
         const targetQ = Quaternion.FromArray(state.head.q);
-        if (!instance.headBone.rotationQuaternion) {
-          instance.headBone.rotationQuaternion = Quaternion.Identity();
-        }
         const lerpFactor = Math.min(1, deltaTime / INTERPOLATION_TIME);
         Quaternion.SlerpToRef(
           interpolated.headQ,
@@ -257,80 +120,27 @@ export function Avatar({ playerId, player, isLocal = false }: AvatarProps) {
           lerpFactor,
           interpolated.headQ
         );
-        instance.headBone.rotationQuaternion.copyFrom(interpolated.headQ);
+        
+        // Apply rotation to head mesh
+        if (!avatar.head.rotationQuaternion) {
+          avatar.head.rotationQuaternion = Quaternion.Identity();
+        }
+        avatar.head.rotationQuaternion.copyFrom(interpolated.headQ);
       }
 
-      const blend = state.blend ?? {};
-      Object.entries(instance.morphTargets).forEach(
-        ([arkitKey, index]) => {
-          const value = clamp01(blend[arkitKey] ?? 0);
-          if (instance.lastBlend[arkitKey] === value) {
-            return;
-          }
-
-          instance.lastBlend[arkitKey] = value;
-
-          instance.blendMeshes.forEach((mesh) => {
-            const manager = mesh.morphTargetManager;
-            const target = manager?.getTarget(index);
-            if (target) {
-              target.influence = value;
-            }
-          });
-        }
-      );
-
-      if (instance.skeleton) {
-        instance.skeleton.animationPropertiesOverride ??=
-          new AnimationPropertiesOverride();
-      }
-
-      const desiredAnim = state.anim;
-      if (desiredAnim !== instance.currentAnimState) {
-        instance.currentAnim?.stop();
-        instance.currentAnim = null;
-
-        const rangeName =
-          desiredAnim === 'walk'
-            ? instance.walkRangeName ?? instance.idleRangeName
-            : instance.idleRangeName ?? instance.walkRangeName;
-
-        if (
-          rangeName &&
-          instance.skeleton?.getAnimationRange(rangeName)
-        ) {
-          const range =
-            instance.skeleton.getAnimationRange(rangeName);
-          if (range) {
-            instance.currentAnim = scene.beginAnimation(
-              instance.skeleton,
-              range.from,
-              range.to,
-              true,
-              desiredAnim === 'walk' ? 1.2 : 1
-            );
-          }
-        } else if (
-          instance.skeleton?.animationPropertiesOverride
-        ) {
-          instance.skeleton.animationPropertiesOverride.speedRatio =
-            desiredAnim === 'walk' ? 1.2 : 1;
-        }
-
-        instance.currentAnimState = desiredAnim;
-      } else if (
-        instance.skeleton?.animationPropertiesOverride
-      ) {
-        instance.skeleton.animationPropertiesOverride.speedRatio =
-          desiredAnim === 'walk' ? 1.2 : 1;
+      // Simple walk animation: slightly bob the body up and down when walking
+      if (state.anim === 'walk') {
+        const walkBob = Math.sin(Date.now() / 200) * 0.05; // Small vertical bob
+        avatar.body.position.y = 0.6 + walkBob;
+      } else {
+        avatar.body.position.y = 0.6;
       }
     });
 
     return () => {
       scene.onBeforeRenderObservable.remove(observer);
     };
-  }, [scene]);
+  }, [scene, isLocal]);
 
   return null;
 }
-
