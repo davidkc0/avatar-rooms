@@ -1,13 +1,10 @@
 import {
-  Mesh,
   Quaternion,
-  Scene,
-  TransformNode,
   Vector3,
 } from '@babylonjs/core';
 import { useEffect, useRef } from 'react';
-import { createSimpleAvatar, SimpleAvatar } from '../avatars/simpleAvatar';
-import { PlayerState } from '../multiplayer/playroom';
+import { createSimpleAvatar, type SimpleAvatar } from '../avatars/simpleAvatar';
+import type { PlayerState } from '../multiplayer/playroom';
 import { useScene } from './scene';
 
 type AvatarProps = {
@@ -15,6 +12,7 @@ type AvatarProps = {
   player: PlayerState;
   isLocal?: boolean;
   videoElement?: HTMLVideoElement;
+  getLocalState?: () => PlayerState | null;
 };
 
 const INTERPOLATION_TIME = 0.12; // 120ms
@@ -25,7 +23,7 @@ type InterpolatedState = {
   headQ: Quaternion;
 };
 
-export function Avatar({ playerId, player, isLocal = false, videoElement }: AvatarProps) {
+export function Avatar({ playerId, player, isLocal = false, videoElement, getLocalState }: AvatarProps) {
   const { scene } = useScene();
   const avatarRef = useRef<SimpleAvatar | null>(null);
   const playerStateRef = useRef(player);
@@ -73,24 +71,18 @@ export function Avatar({ playerId, player, isLocal = false, videoElement }: Avat
         return;
       }
 
-      const state = playerStateRef.current;
+      // For local player, read directly from getLocalState if available (real-time)
+      // Otherwise fall back to prop (for remote players or if getter not provided)
+      const state = isLocal && getLocalState ? (getLocalState() ?? playerStateRef.current) : playerStateRef.current;
       const target = targetStateRef.current;
       const interpolated = interpolatedRef.current;
       const deltaTime = scene.getEngine().getDeltaTime() / 1000;
 
-      // Update target when state changes
-      if (
-        target.pos.x !== state.pos.x ||
-        target.pos.y !== state.pos.y ||
-        target.pos.z !== state.pos.z ||
-        target.rotY !== state.rotY ||
-        JSON.stringify(target.head.q) !== JSON.stringify(state.head.q)
-      ) {
-        targetStateRef.current = state;
-      }
+      // Always update target to latest state
+      targetStateRef.current = state;
 
       if (isLocal) {
-        // Direct updates for local player
+        // For local player, use the latest state directly from movement loop
         avatar.root.position.set(state.pos.x, state.pos.y, state.pos.z);
         avatar.root.rotation.y = state.rotY;
         interpolated.pos.set(state.pos.x, state.pos.y, state.pos.z);
@@ -128,19 +120,46 @@ export function Avatar({ playerId, player, isLocal = false, videoElement }: Avat
         avatar.head.rotationQuaternion.copyFrom(interpolated.headQ);
       }
 
-      // Simple walk animation: slightly bob the body up and down when walking
+      const time = performance.now() / 180; // shared phase for simple animations
+
+      // Simple walk / idle animation
       if (state.anim === 'walk') {
-        const walkBob = Math.sin(Date.now() / 200) * 0.05; // Small vertical bob
-        avatar.body.position.y = 0.6 + walkBob;
+        const walkBob = Math.sin(time * 2) * 0.05;
+        // Body bob
+        avatar.body.position.y = 1.4 + walkBob;
+
+        // Arm swing (opposite phase)
+        const swing = Math.sin(time * 2) * 0.4;
+        const counterSwing = Math.sin(time * 2 + Math.PI) * 0.4;
+        avatar.leftArm.rotation.x = swing;
+        avatar.rightArm.rotation.x = counterSwing;
+
+        // Simple leg swing
+        avatar.leftLeg.rotation.x = counterSwing * 0.5;
+        avatar.rightLeg.rotation.x = swing * 0.5;
       } else {
-        avatar.body.position.y = 0.6;
+        // Idle: slight breathing / sway
+        const idleT = performance.now() / 1000;
+        avatar.body.position.y = 1.4 + Math.sin(idleT * 0.5) * 0.01;
+        avatar.body.rotation.x = -0.05 + Math.sin(idleT * 0.25) * 0.01;
+
+        // Relax arms and legs towards default pose
+        avatar.leftArm.rotation.x *= 0.9;
+        avatar.rightArm.rotation.x *= 0.9;
+        avatar.leftLeg.rotation.x *= 0.9;
+        avatar.rightLeg.rotation.x *= 0.9;
+      }
+
+      // Ensure base body height when no extra bob is applied
+      if (state.anim !== 'walk') {
+        avatar.body.position.y = 1.4;
       }
     });
 
     return () => {
       scene.onBeforeRenderObservable.remove(observer);
     };
-  }, [scene, isLocal]);
+  }, [scene, isLocal, getLocalState]);
 
   return null;
 }

@@ -10,7 +10,8 @@
     "cap:copy": "cap copy",
     "cap:ios": "vite build && cap copy ios && cap open ios",
     "cap:android": "vite build && cap copy android && cap open android",
-    "download-mediapipe": "node scripts/download-mediapipe.js"
+    "download-mediapipe": "node scripts/download-mediapipe.js",
+    "cap:ios:clean": "rm -rf ios/App/App/public && npm run build && npx cap sync ios"
   },
   "dependencies": {
     "@babylonjs/core": "^8.36.1",

@@ -6,7 +6,9 @@ import {
   HemisphericLight,
   MeshBuilder,
   Scene,
+  StandardMaterial,
   Vector3,
+  Texture,
 } from '@babylonjs/core';
 import {
   PropsWithChildren,
@@ -26,6 +28,7 @@ type SceneContextValue = {
   engine: Engine;
   scene: Scene;
   canvas: HTMLCanvasElement;
+  camera: ArcRotateCamera;
 };
 
 const SceneContext = createContext<SceneContextValue | null>(null);
@@ -42,6 +45,7 @@ const useBabylon = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [engine, setEngine] = useState<Engine | null>(null);
   const [scene, setScene] = useState<Scene | null>(null);
+  const cameraRef = useRef<ArcRotateCamera | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -64,18 +68,49 @@ const useBabylon = () => {
       sceneInstance
     );
     camera.attachControl(canvas, true);
+    camera.inputs.removeByType('ArcRotateCameraKeyboardMoveInput');
     camera.minZ = 0.1;
     camera.lowerBetaLimit = 0.1;
     camera.upperBetaLimit = Math.PI / 2;
     camera.panningSensibility = 0;
+    cameraRef.current = camera;
 
     new HemisphericLight('light', new Vector3(0, 1, 0), sceneInstance);
 
-    MeshBuilder.CreateGround(
+    const ground = MeshBuilder.CreateGround(
       'ground',
       { width: 20, height: 20 },
       sceneInstance
     );
+    const groundMaterial = new StandardMaterial('ground-mat', sceneInstance);
+    groundMaterial.diffuseColor = { r: 0.2, g: 0.2, b: 0.2, a: 1 } as any; // Dark gray
+    const gridTexture = new Texture(
+      'https://assets.babylonjs.com/environments/tile1.jpg',
+      sceneInstance
+    );
+    gridTexture.uScale = 10;
+    gridTexture.vScale = 10;
+    groundMaterial.diffuseTexture = gridTexture;
+    ground.material = groundMaterial;
+
+    // Reference cubes
+    const box1 = MeshBuilder.CreateBox('box1', { size: 1 }, sceneInstance);
+    box1.position.set(2, 0.5, 2);
+    const mat1 = new StandardMaterial('mat1', sceneInstance);
+    mat1.diffuseColor = { r: 0.8, g: 0.2, b: 0.2, a: 1 } as any;
+    box1.material = mat1;
+
+    const box2 = MeshBuilder.CreateBox('box2', { size: 1 }, sceneInstance);
+    box2.position.set(-3, 0.5, 1);
+    const mat2 = new StandardMaterial('mat2', sceneInstance);
+    mat2.diffuseColor = { r: 0.2, g: 0.8, b: 0.2, a: 1 } as any;
+    box2.material = mat2;
+
+    const box3 = MeshBuilder.CreateBox('box3', { size: 1 }, sceneInstance);
+    box3.position.set(0, 0.5, -4);
+    const mat3 = new StandardMaterial('mat3', sceneInstance);
+    mat3.diffuseColor = { r: 0.2, g: 0.2, b: 0.8, a: 1 } as any;
+    box3.material = mat3;
 
     setEngine(engineInstance);
     setScene(sceneInstance);
@@ -95,24 +130,26 @@ const useBabylon = () => {
       engineInstance.stopRenderLoop();
       sceneInstance.dispose();
       engineInstance.dispose();
+      cameraRef.current = null;
     };
   }, []);
 
-  return { canvasRef, engine, scene };
+  return { canvasRef, engine, scene, camera: cameraRef.current };
 };
 
 export function SceneRoot({ children }: PropsWithChildren) {
-  const { canvasRef, engine, scene } = useBabylon();
+  const { canvasRef, engine, scene, camera } = useBabylon();
   const contextValue = useMemo(() => {
-    if (!engine || !scene || !canvasRef.current) {
+    if (!engine || !scene || !canvasRef.current || !camera) {
       return null;
     }
     return {
       engine,
       scene,
       canvas: canvasRef.current,
+      camera,
     };
-  }, [engine, scene]);
+  }, [engine, scene, camera]);
 
   return (
     <div className="relative h-full w-full">
@@ -125,4 +162,3 @@ export function SceneRoot({ children }: PropsWithChildren) {
     </div>
   );
 }
-

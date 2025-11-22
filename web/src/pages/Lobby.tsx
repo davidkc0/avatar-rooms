@@ -4,7 +4,7 @@ import { useEffect } from 'react';
 console.log('[Lobby.tsx] Module loaded');
 
 const ROOMS = [
-  { name: 'Plaza', slug: 'plaza', description: 'Meet in our shared hub world.' },
+  { name: 'Plaza', slug: 'plaza', description: 'Meet in our shared hub world of poop 2.0. FUCK' },
   { name: 'Arcade', slug: 'arcade', description: 'Test gameplay loops and experiments.' },
   { name: 'Lounge', slug: 'lounge', description: 'Relax and chat with live avatars.' },
 ];

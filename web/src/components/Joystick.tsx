@@ -4,42 +4,72 @@ import { useJoystickMovement } from '../state/movement';
 const JOYSTICK_SIZE = 80;
 const JOYSTICK_RADIUS = 40;
 const DEADZONE = 0.1;
+const SMOOTHING = 0.2; // 0-1 (higher is snappier)
+
+type Vector = { x: number; y: number };
+const lerp = (start: Vector, end: Vector, t: number): Vector => ({
+  x: start.x + (end.x - start.x) * t,
+  y: start.y + (end.y - start.y) * t,
+});
 
 export function Joystick() {
   const [, setInput] = useJoystickMovement();
   const containerRef = useRef<HTMLDivElement>(null);
   const [isActive, setIsActive] = useState(false);
-  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [position, setPosition] = useState<Vector>({ x: 0, y: 0 });
+  const targetPositionRef = useRef<Vector>({ x: 0, y: 0 });
+  const animationFrameRef = useRef<number | null>(null);
 
-  const getTouchPos = (e: TouchEvent | MouseEvent): { x: number; y: number } => {
+  const handleStart = (e: TouchEvent | MouseEvent) => {
+    e.preventDefault();
+    setIsActive(true);
+    
     const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) {
-      return { x: 0, y: 0 };
-    }
+    if (!rect) return;
 
-    const clientX = 'touches' in e ? e.touches[0]?.clientX ?? e.changedTouches[0]?.clientX ?? 0 : e.clientX;
-    const clientY = 'touches' in e ? e.touches[0]?.clientY ?? e.changedTouches[0]?.clientY ?? 0 : e.clientY;
+    const clientX = 'touches' in e ? (e.touches[0]?.clientX ?? e.changedTouches[0]?.clientX) : (e as MouseEvent).clientX;
+    const clientY = 'touches' in e ? (e.touches[0]?.clientY ?? e.changedTouches[0]?.clientY) : (e as MouseEvent).clientY;
+    
+    updateFromPos(
+      clientX - rect.left - rect.width / 2,
+      clientY - rect.top - rect.height / 2
+    );
+  };
 
-    return {
-      x: clientX - rect.left - rect.width / 2,
-      y: clientY - rect.top - rect.height / 2,
-    };
+  const handleMove = (e: TouchEvent | MouseEvent) => {
+    if (!isActive) return;
+    e.preventDefault();
+
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    // Use first touch for consistency, fallback to changed if needed
+    const clientX = 'touches' in e ? (e.touches[0]?.clientX ?? e.changedTouches[0]?.clientX) : (e as MouseEvent).clientX;
+    const clientY = 'touches' in e ? (e.touches[0]?.clientY ?? e.changedTouches[0]?.clientY) : (e as MouseEvent).clientY;
+
+    updateFromPos(
+      clientX - rect.left - rect.width / 2,
+      clientY - rect.top - rect.height / 2
+    );
   };
 
   const updateFromPos = (x: number, y: number) => {
     const distance = Math.sqrt(x * x + y * y);
     const maxDistance = JOYSTICK_RADIUS;
+    
+    let clampedX = x;
+    let clampedY = y;
 
     if (distance > maxDistance) {
       const angle = Math.atan2(y, x);
-      x = Math.cos(angle) * maxDistance;
-      y = Math.sin(angle) * maxDistance;
+      clampedX = Math.cos(angle) * maxDistance;
+      clampedY = Math.sin(angle) * maxDistance;
     }
 
-    setPosition({ x, y });
+    targetPositionRef.current = { x: clampedX, y: clampedY };
 
-    const normalizedX = x / maxDistance;
-    const normalizedY = y / maxDistance;
+    const normalizedX = clampedX / maxDistance;
+    const normalizedY = clampedY / maxDistance;
 
     if (Math.abs(normalizedX) < DEADZONE && Math.abs(normalizedY) < DEADZONE) {
       setInput({ forward: 0, right: 0 });
@@ -51,27 +81,37 @@ export function Joystick() {
     }
   };
 
-  const handleStart = (e: TouchEvent | MouseEvent) => {
+  const handleEnd = (e: TouchEvent | MouseEvent) => {
     e.preventDefault();
-    setIsActive(true);
-    const pos = getTouchPos(e);
-    updateFromPos(pos.x, pos.y);
-  };
-
-  const handleMove = (e: TouchEvent | MouseEvent) => {
-    if (!isActive) {
-      return;
-    }
-    e.preventDefault();
-    const pos = getTouchPos(e);
-    updateFromPos(pos.x, pos.y);
-  };
-
-  const handleEnd = () => {
     setIsActive(false);
-    setPosition({ x: 0, y: 0 });
+    targetPositionRef.current = { x: 0, y: 0 };
     setInput({ forward: 0, right: 0 });
   };
+
+  // Smooth interpolation loop
+  useEffect(() => {
+    const animate = () => {
+      setPosition((current) => {
+        const next = lerp(current, targetPositionRef.current, SMOOTHING);
+        if (
+          Math.abs(next.x - current.x) < 0.001 &&
+          Math.abs(next.y - current.y) < 0.001
+        ) {
+          return targetPositionRef.current;
+        }
+        return next;
+      });
+      animationFrameRef.current = requestAnimationFrame(animate);
+    };
+
+    animationFrameRef.current = requestAnimationFrame(animate);
+
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -101,10 +141,11 @@ export function Joystick() {
   return (
     <div
       ref={containerRef}
-      className="absolute bottom-6 left-6 touch-none select-none"
+      className="absolute bottom-6 left-6 touch-none select-none z-50"
       style={{
         width: JOYSTICK_SIZE,
         height: JOYSTICK_SIZE,
+        zIndex: 50,
       }}
     >
       <div
@@ -121,12 +162,15 @@ export function Joystick() {
         style={{
           width: JOYSTICK_RADIUS,
           height: JOYSTICK_RADIUS,
-          left: JOYSTICK_RADIUS / 2 + position.x,
-          top: JOYSTICK_RADIUS / 2 + position.y,
+          left: JOYSTICK_SIZE / 2 + position.x,
+          top: JOYSTICK_SIZE / 2 + position.y,
           transform: 'translate(-50%, -50%)',
         }}
       />
     </div>
   );
 }
+
+
+
 

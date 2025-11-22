@@ -20,4 +20,14 @@ export default defineConfig({
     // Ensure React is available globally for playroomkit
     'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development'),
   },
+  build: {
+    // Force new filenames every build to bypass native webview caching
+    rollupOptions: {
+      output: {
+        entryFileNames: `assets/[name].[hash].${Date.now()}.js`,
+        chunkFileNames: `assets/[name].[hash].${Date.now()}.js`,
+        assetFileNames: `assets/[name].[hash].${Date.now()}.[ext]`,
+      },
+    },
+  },
 })
