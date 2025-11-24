@@ -142,7 +142,7 @@ export async function startFaceTracking(
     headQ: [number, number, number, number],
     blend: Record<string, number>
   ) => void
-) {
+): Promise<MediaStream> {
   const stream = await navigator.mediaDevices.getUserMedia(
     VIDEO_CONSTRAINTS
   );
@@ -184,6 +184,8 @@ export async function startFaceTracking(
   };
 
   animationHandle = requestAnimationFrame(step);
+
+  return stream;
 }
 
 export function stopFaceTracking() {

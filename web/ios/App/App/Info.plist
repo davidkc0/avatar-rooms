@@ -47,5 +47,7 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Camera is used for live face tracking on your avatar.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Microphone access is required for voice chat.</string>
 </dict>
 </plist>

@@ -47,6 +47,9 @@ const quantizeState = (state: PlayerState): PlayerState => ({
   anim: state.anim,
   head: quantizeHead(state.head),
   blend: quantizeBlend(state.blend),
+  avatarUrl: state.avatarUrl,
+  avatarImg: state.avatarImg,
+  withVoiceChat: state.withVoiceChat,
 });
 
 const arraysEqual = (a: readonly number[], b: readonly number[]) =>
@@ -80,6 +83,21 @@ export function startWriteLoop(getLocal: () => PlayerState) {
         !arraysEqual(previousState.head.q, localState.head.q)
       ) {
         partial.head = localState.head;
+      }
+
+      if (!previousState || previousState.avatarUrl !== localState.avatarUrl) {
+        partial.avatarUrl = localState.avatarUrl;
+      }
+
+      if (!previousState || previousState.avatarImg !== localState.avatarImg) {
+        partial.avatarImg = localState.avatarImg;
+      }
+
+      if (
+        !previousState ||
+        previousState.withVoiceChat !== localState.withVoiceChat
+      ) {
+        partial.withVoiceChat = localState.withVoiceChat;
       }
 
       const blendChanges = diffKeys(previousState?.blend, localState.blend);

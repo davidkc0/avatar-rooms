@@ -29,7 +29,7 @@ function Lobby() {
           <button
             key={room.slug}
             className="group flex flex-col gap-3 rounded-lg border border-slate-800 bg-slate-900/80 p-5 text-left transition hover:border-slate-500 hover:bg-slate-900"
-            onClick={() => navigate(`/rooms/${room.slug}`)}
+            onClick={() => navigate(`/avatar/${room.slug}`, { state: { roomSlug: room.slug } })}
           >
             <span className="text-xl font-semibold text-slate-100 group-hover:text-white">
               {room.name}

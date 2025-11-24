@@ -1,14 +1,43 @@
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Route, Routes, useNavigate, useLocation } from 'react-router-dom';
 import { useEffect } from 'react';
 import Lobby from './pages/Lobby';
 import Room from './pages/Room';
-
-const BUILD_ID = 'ios-v4-2025-11-22-01';
-
-<h1>Avatar Rooms – {BUILD_ID}</h1>
-
+// @ts-ignore - Package types may not be available until installed
+import { AvatarCreator } from '@readyplayerme/react-avatar-creator';
+import { getRandomExpression } from './utils/helpers';
 
 console.log('[app.tsx] Module loaded');
+
+function AvatarCreatorWrapper() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const roomSlug = (location.state as any)?.roomSlug || 'plaza';
+
+  return (
+    <AvatarCreator
+      subdomain="playroom"
+      className="fixed top-0 left-0 z-10 w-screen h-screen"
+      onAvatarExported={(event: any) => {
+        const avatarUrl = event.data.url;
+        const avatarId = event.data.avatarId;
+        const avatarImage = `https://models.readyplayer.me/${avatarId}.png?expression=${getRandomExpression()}&size=512`;
+        
+        // Store avatar data in localStorage for Room to use
+        localStorage.setItem('rpm_avatarUrl', avatarUrl);
+        localStorage.setItem('rpm_avatarImg', avatarImage);
+        localStorage.setItem('rpm_avatarId', avatarId);
+        
+        // Navigate to the room
+        navigate(`/rooms/${roomSlug}`, { 
+          state: { 
+            avatarUrl: avatarUrl.split('?')[0] + '?' + new Date().getTime() + '&meshLod=2',
+            avatarImg: avatarImage 
+          } 
+        });
+      }}
+    />
+  );
+}
 
 function App() {
   useEffect(() => {
@@ -39,6 +68,7 @@ function App() {
         <main className="flex-1 relative overflow-hidden" style={{ flex: '1', height: '100%', width: '100%' }}>
           <Routes>
             <Route path="/" element={<Lobby />} />
+            <Route path="/avatar/:slug" element={<AvatarCreatorWrapper />} />
             <Route path="/rooms/:slug" element={<Room />} />
           </Routes>
         </main>

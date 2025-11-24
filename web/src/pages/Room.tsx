@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
+import { getStoreValue } from '../utils/helpers';
 import { Avatar } from '../world/Avatar';
 import { SceneRoot, useScene } from '../world/scene';
 import { Vector3 } from '@babylonjs/core';
@@ -16,6 +17,7 @@ import { startWriteLoop, startHeartbeat, stopHeartbeat } from '../multiplayer/ne
 import { startFaceTracking, stopFaceTracking } from '../tracking/face';
 import { quantizeBlend } from '../multiplayer/netloop';
 import { useKeyboardMovement, useJoystickMovement, type MovementInput } from '../state/movement';
+import { VoiceChat } from '../components/VoiceChat';
 import { Joystick } from '../components/Joystick';
 
 type LocalUiState = {
@@ -36,12 +38,15 @@ const createFallbackPlayer = (): PlayerState => ({
 function Room() {
   const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const [world, setWorld] = useState<WorldState>({ players: {} });
   const [myId, setMyId] = useState<string>('none');
+  const [roomCode, setRoomCode] = useState<string>('');
   const [ui, setUi] = useState<LocalUiState>(initialUi);
   const [isConnecting, setIsConnecting] = useState(true);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const frameCounterRef = useRef(0);
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const worldRef = useRef(world);
   const faceBlurRef = useRef(ui.faceBlur);
   const keyboardInput = useKeyboardMovement();
@@ -107,18 +112,45 @@ function Room() {
         
         setIsConnecting(false);
         setMyId(connectedMyId);
+        setRoomCode(connectedRoomCode);
         console.log('[Room] Connected with player ID:', connectedMyId, 'roomCode:', connectedRoomCode);
 
+        // Get avatar data from location state or localStorage
+        const locationState = location.state as any;
+        const storedAvatarUrl = locationState?.avatarUrl || getStoreValue('rpm_avatarUrl');
+        const storedAvatarImg = locationState?.avatarImg || getStoreValue('rpm_avatarImg');
+        
         // Initialize local player state from world state or fallback
         const initialState = worldRef.current.players[connectedMyId] ?? createFallbackPlayer();
         console.log('[Room] Initial player state:', initialState);
-        localPlayerStateRef.current = initialState;
+        
+        // Build avatar URL with timestamp to avoid caching (preserve existing params)
+        let avatarUrl: string | undefined = undefined;
+        if (storedAvatarUrl) {
+          try {
+            const url = new URL(storedAvatarUrl);
+            url.searchParams.set('meshLod', '2');
+            url.searchParams.set('t', String(Date.now()));
+            avatarUrl = url.toString();
+          } catch (err) {
+            console.warn('[Room] Invalid avatar URL, using raw value', err);
+            avatarUrl = storedAvatarUrl;
+          }
+        }
+        
+        localPlayerStateRef.current = {
+          ...initialState,
+          ...(avatarUrl && { avatarUrl }),
+          ...(storedAvatarImg && { avatarImg: storedAvatarImg }),
+        };
+        
+        console.log('[Room] Using avatar URL:', avatarUrl);
 
-        // Immediately add local player to world state for display
+        // Immediately add local player to world state for display (use localPlayerStateRef to include avatarUrl)
         setWorld((prev) => {
           const updated = { ...prev };
           if (!updated.players) updated.players = {};
-          updated.players[connectedMyId] = initialState;
+          updated.players[connectedMyId] = localPlayerStateRef.current!;
           console.log('[Room] Added local player to world state:', Object.keys(updated.players));
           return updated;
         });
@@ -169,8 +201,8 @@ function Room() {
         // Store interval ID for cleanup
         (unsubscribe as any).worldUpdateInterval = worldUpdateInterval;
 
-        // Write initial state immediately to ensure we appear in the room
-        writeMyState(initialState).catch((error) => {
+        // Write initial state immediately to ensure we appear in the room (use localPlayerStateRef to include avatarUrl)
+        writeMyState(localPlayerStateRef.current!).catch((error) => {
           console.error('[Room] Failed to write initial state', error);
         });
 
@@ -261,11 +293,16 @@ function Room() {
         }).catch((error) => {
           console.error('[Room] Failed to write face tracking state', error);
         });
-      }).catch((error) => {
-        console.error('[Room] Failed to start face tracking', error);
-      });
+      })
+        .then((stream) => {
+          setCameraStream(stream);
+        })
+        .catch((error) => {
+          console.error('[Room] Failed to start face tracking', error);
+        });
     } else {
       stopFaceTracking();
+      setCameraStream(null);
       sendNeutral();
       frameCounterRef.current = 0;
     }
@@ -273,6 +310,7 @@ function Room() {
     return () => {
       cancelled = true;
       stopFaceTracking();
+      setCameraStream(null);
       sendNeutral();
       frameCounterRef.current = 0;
     };
@@ -291,8 +329,8 @@ function Room() {
         // Access localPlayerStateRef from parent scope
         const localState = localPlayerStateRef.current;
         if (localState && camera) {
-          // Update camera target to follow player (offset by 1 unit up for better view)
-          camera.setTarget(new Vector3(localState.pos.x, localState.pos.y + 1, localState.pos.z));
+          // Update camera target to follow player (offset by 1.6 unit up for head level)
+          camera.setTarget(new Vector3(localState.pos.x, localState.pos.y + 1.6, localState.pos.z));
         }
       });
       
@@ -318,9 +356,21 @@ function Room() {
       )}
 
       {/* Mobile Controls Overlay */}
-      <div className="absolute top-4 right-4 z-20 flex flex-col gap-3">
+      <div className="absolute top-4 right-4 z-20 flex flex-col gap-3 pointer-events-none">
+        <div className="pointer-events-auto">
+          {/* Voice Chat */}
+        {myId !== 'none' && roomCode && (
+          <VoiceChat
+            uid={myId}
+            roomCode={roomCode}
+            cameraStream={cameraStream}
+            cameraEnabled={ui.cameraOn}
+          />
+        )}
+        </div>
+
         <button
-          className="h-12 w-12 rounded-full bg-slate-800/80 border border-slate-600 text-white flex items-center justify-center shadow-lg backdrop-blur active:bg-slate-700"
+          className="h-12 w-12 rounded-full bg-slate-800/80 border border-slate-600 text-white flex items-center justify-center shadow-lg backdrop-blur active:bg-slate-700 pointer-events-auto"
           onClick={toggleCamera}
         >
           {/* Camera Icon */}
@@ -336,7 +386,7 @@ function Room() {
         </button>
         
         <button
-          className="h-12 w-12 rounded-full bg-slate-800/80 border border-slate-600 text-white flex items-center justify-center shadow-lg backdrop-blur active:bg-slate-700"
+          className="h-12 w-12 rounded-full bg-slate-800/80 border border-slate-600 text-white flex items-center justify-center shadow-lg backdrop-blur active:bg-slate-700 pointer-events-auto"
           onClick={toggleFaceBlur}
         >
           {/* Face Blur Icon (Sparkles/Mask) */}
@@ -346,7 +396,7 @@ function Room() {
         </button>
 
         <button
-          className="h-12 w-12 rounded-full bg-rose-900/80 border border-rose-700 text-white flex items-center justify-center shadow-lg backdrop-blur active:bg-rose-800 mt-4"
+          className="h-12 w-12 rounded-full bg-rose-900/80 border border-rose-700 text-white flex items-center justify-center shadow-lg backdrop-blur active:bg-rose-800 mt-4 pointer-events-auto"
           onClick={leave}
         >
           {/* Exit Icon */}
@@ -374,7 +424,7 @@ function Room() {
                   playerId={id} 
                   player={playerState} 
                   isLocal={id === myId}
-                  videoElement={id === myId ? videoRef.current || undefined : undefined}
+                  videoElement={id === myId && ui.cameraOn ? videoRef.current || undefined : undefined}
                   getLocalState={id === myId ? () => localPlayerStateRef.current : undefined}
                 />
               );
@@ -386,7 +436,7 @@ function Room() {
                 playerId={myId} 
                 player={createFallbackPlayer()} 
                 isLocal={true}
-                videoElement={videoRef.current || undefined}
+                videoElement={ui.cameraOn ? videoRef.current || undefined : undefined}
                 getLocalState={() => localPlayerStateRef.current}
               />
             )

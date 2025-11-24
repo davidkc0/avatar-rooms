@@ -46,6 +46,7 @@ const useBabylon = () => {
   const [engine, setEngine] = useState<Engine | null>(null);
   const [scene, setScene] = useState<Scene | null>(null);
   const cameraRef = useRef<ArcRotateCamera | null>(null);
+  const [camera, setCamera] = useState<ArcRotateCamera | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -74,6 +75,7 @@ const useBabylon = () => {
     camera.upperBetaLimit = Math.PI / 2;
     camera.panningSensibility = 0;
     cameraRef.current = camera;
+    setCamera(camera);
 
     new HemisphericLight('light', new Vector3(0, 1, 0), sceneInstance);
 
@@ -131,10 +133,11 @@ const useBabylon = () => {
       sceneInstance.dispose();
       engineInstance.dispose();
       cameraRef.current = null;
+      setCamera(null);
     };
   }, []);
 
-  return { canvasRef, engine, scene, camera: cameraRef.current };
+  return { canvasRef, engine, scene, camera };
 };
 
 export function SceneRoot({ children }: PropsWithChildren) {
@@ -149,7 +152,7 @@ export function SceneRoot({ children }: PropsWithChildren) {
       canvas: canvasRef.current,
       camera,
     };
-  }, [engine, scene, camera]);
+  }, [engine, scene, camera, canvasRef]);
 
   return (
     <div className="relative h-full w-full">

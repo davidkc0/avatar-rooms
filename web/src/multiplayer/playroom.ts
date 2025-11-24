@@ -14,6 +14,9 @@ export type PlayerState = {
   anim: 'idle' | 'walk';
   head: { q: [number, number, number, number] };
   blend: Record<string, number>;
+  avatarUrl?: string;
+  avatarImg?: string;
+  withVoiceChat?: boolean;
 };
 
 export type WorldState = {
