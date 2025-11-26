@@ -21,7 +21,9 @@ const AgoraManager = async (eventsCallback: (event: string, ...args: any[]) => v
   if (!agoraEngine) throw new Error("Failed to create Agora client");
 
   agoraEngine.on('user-published', async (user, mediaType) => {
+    console.log('[AgoraManager] user-published - UID:', user.uid, 'mediaType:', mediaType);
     await agoraEngine!.subscribe(user, mediaType);
+    console.log('[AgoraManager] Subscribed to', mediaType, 'for user:', user.uid, 'hasTrack:', mediaType === 'video' ? !!user.videoTrack : !!user.audioTrack);
     eventsCallback('user-published', user, mediaType);
   });
 

@@ -17,11 +17,15 @@ export type PlayerState = {
   avatarUrl?: string;
   avatarImg?: string;
   withVoiceChat?: boolean;
+  tvHeadEnabled?: boolean;
+  agoraVideoUid?: number | string;
 };
 
 export type WorldState = {
   players: Record<string, PlayerState>;
 };
+
+const PLAYER_STATE_KEY = 'playState';
 
 let MY_ID: string | null = null;
 let ROOM_CODE_IN_USE = 'plaza';
@@ -40,13 +44,6 @@ function assertSameRoom(nextCode: string) {
     );
   }
   ROOM_CODE_IN_USE = nextCode;
-}
-
-async function ensureWorldState(): Promise<WorldState> {
-  const pk = await getPlayroomkit();
-  const s = (pk.getState() as WorldState) || ({ players: {} } as WorldState);
-  if (!s.players) s.players = {};
-  return s;
 }
 
 function defaultPlayer(): PlayerState {
@@ -96,12 +93,11 @@ export async function connectToRoom(
   }
   MY_ID = me.id;
 
-  // Seed self if missing
-  const s = await ensureWorldState();
-  if (!s.players[MY_ID]) {
-    s.players[MY_ID] = defaultPlayer();
-    pk.setState(s);
-    console.info('[connectToRoom] seeded player node for', MY_ID);
+  const player = pk.myPlayer();
+  if (player) {
+    const existing = (player.getState(PLAYER_STATE_KEY) as PlayerState) ?? defaultPlayer();
+    player.setState(PLAYER_STATE_KEY, existing, true);
+    console.info('[connectToRoom] initialized state for', MY_ID);
   }
 
   return { myId: MY_ID, roomCode: ROOM_CODE_IN_USE };
@@ -120,72 +116,87 @@ export function getLastWriteAt() {
 }
 
 export function subscribeState(cb: (s: WorldState) => void): () => void {
-  let cleanup: (() => void) | null = null;
-  let intervalId: ReturnType<typeof setInterval> | null = null;
-  
-  getPlayroomkit().then((pk) => {
-    // Try onStateChange first, fallback to polling if not available
-    if (typeof pk.onStateChange === 'function') {
-      cleanup = pk.onStateChange((ns) => {
-        cb((ns as WorldState) ?? { players: {} });
-      });
-    } else {
-      // Fallback to polling every 100ms
-      console.warn('[playroom] onStateChange not available, using polling');
-      let lastState: any = null;
-      intervalId = setInterval(() => {
-        const currentState = pk.getState() as WorldState;
-        // Only call callback if state changed
-        if (JSON.stringify(currentState) !== JSON.stringify(lastState)) {
-          lastState = currentState;
-          cb(currentState ?? { players: {} });
-        }
-      }, 100);
+  let disposed = false;
+
+  const rebuildWorld = async () => {
+    const pk = await getPlayroomkit();
+  const participantsRecord = pk.getParticipants
+    ? pk.getParticipants()
+    : {};
+  const participants = Object.values(
+    participantsRecord as Record<string, any>
+  );
+
+    const players: Record<string, PlayerState> = {};
+
+    participants.forEach((player) => {
+      const stored =
+        (player.getState(PLAYER_STATE_KEY) as PlayerState) ?? defaultPlayer();
+      players[player.id] = stored;
+    });
+
+    // Include self even if not in participants yet
+    const me = pk.myPlayer();
+    if (me && !players[me.id]) {
+      const stored =
+        (me.getState(PLAYER_STATE_KEY) as PlayerState) ?? defaultPlayer();
+      players[me.id] = stored;
     }
-    
-    // Also call with initial state
-    const initialState = (pk.getState() as WorldState) ?? { players: {} };
-    cb(initialState);
-  }).catch((error) => {
-    console.error('[playroom] Failed to subscribe to state', error);
-  });
+
+    if (!disposed) {
+      cb({ players });
+    }
+  };
+
+  let intervalId: ReturnType<typeof setInterval> | null = null;
+  let unsubscribeJoin: (() => void) | null = null;
+
+  getPlayroomkit()
+    .then((pk) => {
+      rebuildWorld();
+      intervalId = setInterval(rebuildWorld, 100);
+      unsubscribeJoin =
+        pk.onPlayerJoin?.((player) => {
+          rebuildWorld();
+          player.onQuit?.(() => rebuildWorld());
+        }) ?? null;
+    })
+    .catch((error) => {
+      console.error('[playroom] Failed to subscribe to state', error);
+    });
 
   return () => {
-    if (cleanup) {
-      cleanup();
-      cleanup = null;
-    }
+    disposed = true;
     if (intervalId) {
       clearInterval(intervalId);
       intervalId = null;
     }
+    if (unsubscribeJoin) {
+      unsubscribeJoin();
+      unsubscribeJoin = null;
+    }
   };
 }
 
-// Safe, atomic updater to avoid clobbering sibling keys
-export async function updateMyNode(
-  mutator: (p: PlayerState) => PlayerState
-) {
-  if (!MY_ID) return;
-  
-  const pk = await getPlayroomkit();
-  const s = await ensureWorldState();
-  const current = s.players[MY_ID] ?? defaultPlayer();
-  s.players[MY_ID] = mutator(current);
-  pk.setState(s);
-  lastWriteAt = Date.now();
-}
-
-// Shallow merge variant (convenience)
 export async function writeMyState(partial: Partial<PlayerState>) {
-  await updateMyNode((p) => {
-    const merged = { ...p, ...partial };
-    // Special handling for blend: merge objects instead of replacing
-    if (partial.blend && p.blend) {
-      merged.blend = { ...p.blend, ...partial.blend };
-    }
-    return merged;
-  });
+  const pk = await getPlayroomkit();
+  const player = pk.myPlayer();
+  if (!player) return;
+
+  const current =
+    (player.getState(PLAYER_STATE_KEY) as PlayerState) ?? defaultPlayer();
+
+  const merged: PlayerState = {
+    ...current,
+    ...partial,
+    blend:
+      partial.blend && current.blend
+        ? { ...current.blend, ...partial.blend }
+        : partial.blend ?? current.blend,
+  };
+
+  player.setState(PLAYER_STATE_KEY, merged, true);
+  lastWriteAt = Date.now();
 }
 
 export function disconnectFromRoom() {

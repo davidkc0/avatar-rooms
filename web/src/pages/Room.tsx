@@ -13,12 +13,13 @@ import {
   subscribeState,
   writeMyState,
 } from '../multiplayer/playroom';
-import { startWriteLoop, startHeartbeat, stopHeartbeat } from '../multiplayer/netloop';
+import { startHeartbeat, stopHeartbeat } from '../multiplayer/netloop';
 import { startFaceTracking, stopFaceTracking } from '../tracking/face';
 import { quantizeBlend } from '../multiplayer/netloop';
 import { useKeyboardMovement, useJoystickMovement, type MovementInput } from '../state/movement';
 import { VoiceChat } from '../components/VoiceChat';
 import { Joystick } from '../components/Joystick';
+import '../utils/helpers'; // Import to ensure hashCode is available
 
 type LocalUiState = {
   cameraOn: boolean;
@@ -48,6 +49,7 @@ function Room() {
   const frameCounterRef = useRef(0);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const worldRef = useRef(world);
+  const worldStateRef = useRef<WorldState>({ players: {} });
   const faceBlurRef = useRef(ui.faceBlur);
   const keyboardInput = useKeyboardMovement();
   const [joystickInput] = useJoystickMovement();
@@ -64,6 +66,7 @@ function Room() {
 
   useEffect(() => {
     worldRef.current = world;
+    worldStateRef.current = world;
   }, [world]);
 
   useEffect(() => {
@@ -150,64 +153,44 @@ function Room() {
         setWorld((prev) => {
           const updated = { ...prev };
           if (!updated.players) updated.players = {};
-          updated.players[connectedMyId] = localPlayerStateRef.current!;
-          console.log('[Room] Added local player to world state:', Object.keys(updated.players));
+          updated.players[connectedMyId] = {
+            ...localPlayerStateRef.current!,
+            pos: { ...localPlayerStateRef.current!.pos },
+            head: { ...localPlayerStateRef.current!.head },
+            blend: { ...localPlayerStateRef.current!.blend },
+          };
           return updated;
         });
 
         unsubscribe = subscribeState((state) => {
-          console.log('[Room] State update received:', state);
-          console.log('[Room] Players in state:', Object.keys(state.players || {}));
+          const playerIds = Object.keys(state.players || {});
           
           // Merge local player state into world state for display
           const mergedState = { ...state };
           if (!mergedState.players) mergedState.players = {};
           
-          // Always use the latest local player state
+          // Always use the latest local player state (but preserve all remote players from state)
           if (localPlayerStateRef.current && connectedMyId) {
             mergedState.players[connectedMyId] = localPlayerStateRef.current;
-            console.log('[Room] After merge, players:', Object.keys(mergedState.players));
           }
-          setWorld(mergedState);
+          
+          // Only update if state actually changed (prevent unnecessary re-renders)
+          const currentWorld = worldStateRef.current;
+          const hasChanges = 
+            !currentWorld ||
+            JSON.stringify(currentWorld.players) !== JSON.stringify(mergedState.players);
+          
+          if (hasChanges) {
+        worldStateRef.current = mergedState;
+        setWorld(mergedState);
+          }
         });
         
         // Also update world state periodically from local player state
-        const worldUpdateInterval = setInterval(() => {
-          if (localPlayerStateRef.current && connectedMyId) {
-            setWorld((prev) => {
-              const updated = { ...prev };
-              if (!updated.players) updated.players = {};
-              // Only update if position actually changed
-              const current = updated.players[connectedMyId];
-              const latest = localPlayerStateRef.current;
-              
-              if (!latest) return prev;
-
-              if (
-                !current ||
-                current.pos.x !== latest.pos.x ||
-                current.pos.y !== latest.pos.y ||
-                current.pos.z !== latest.pos.z ||
-                current.rotY !== latest.rotY
-              ) {
-                updated.players[connectedMyId] = latest;
-                return updated;
-              }
-              return prev;
-            });
-          }
-        }, 50); // Update every 50ms
-        
-        // Store interval ID for cleanup
-        (unsubscribe as any).worldUpdateInterval = worldUpdateInterval;
-
-        // Write initial state immediately to ensure we appear in the room (use localPlayerStateRef to include avatarUrl)
+        // This ensures local player updates are reflected immediately, but preserves remote players
+        // Write initial state immediately to ensure we appear in the room
         writeMyState(localPlayerStateRef.current!).catch((error) => {
           console.error('[Room] Failed to write initial state', error);
-        });
-
-        stopWriteLoop = startWriteLoop(() => {
-          return localPlayerStateRef.current ?? createFallbackPlayer();
         });
 
         startHeartbeat(); // prove writes happen periodically
@@ -219,18 +202,69 @@ function Room() {
 
     return () => {
       mountedRef.current = false;
-      stopWriteLoop?.();
       if (unsubscribe) {
         unsubscribe();
-        // Clear world update interval if it exists
-        if ((unsubscribe as any).worldUpdateInterval) {
-          clearInterval((unsubscribe as any).worldUpdateInterval);
-        }
       }
       stopHeartbeat();
       disconnectFromRoom();
     };
   }, [slug]);
+
+  // Movement write loop (20 Hz) - replaces startStateUpdateLoop in viewModel
+  useEffect(() => {
+    if (myId === 'none') return;
+
+    let lastSentState: PlayerState | null = null;
+    let lastLogTime = 0;
+
+    const intervalId = setInterval(() => {
+      const state = localPlayerStateRef.current;
+      if (!state) {
+        return;
+      }
+
+      const movementChanged =
+        !lastSentState ||
+        state.pos.x !== lastSentState.pos.x ||
+        state.pos.y !== lastSentState.pos.y ||
+        state.pos.z !== lastSentState.pos.z ||
+        state.rotY !== lastSentState.rotY ||
+        state.anim !== lastSentState.anim;
+
+      if (!movementChanged) {
+        return;
+      }
+
+      writeMyState({
+        pos: state.pos,
+        rotY: state.rotY,
+        anim: state.anim,
+      })
+        .then(() => {
+          lastSentState = {
+            ...state,
+            pos: { ...state.pos },
+            head: { ...state.head },
+            blend: { ...state.blend },
+          };
+
+          const now = performance.now();
+          if (now - lastLogTime > 1000) {
+            console.log('[Room] ✍️ Wrote movement state', {
+              pos: lastSentState.pos,
+              rotY: lastSentState.rotY,
+              anim: lastSentState.anim,
+            });
+            lastLogTime = now;
+          }
+        })
+        .catch((error) => {
+          console.error('[Room] Failed to write movement state', error);
+        });
+    }, 50); // 20 Hz
+
+    return () => clearInterval(intervalId);
+  }, [myId]);
 
   const players = useMemo(() => Object.entries(world.players), [world.players]);
 
@@ -253,12 +287,23 @@ function Room() {
     let cancelled = false;
 
     const sendNeutral = () => {
+      const neutralHead = { q: [0, 0, 0, 1] as [number, number, number, number] };
+
       writeMyState({
-        head: { q: [0, 0, 0, 1] },
+        head: neutralHead,
         blend: {},
+        tvHeadEnabled: false,
+        agoraVideoUid: undefined,
       }).catch((error) => {
         console.error('[Room] Failed to send neutral state', error);
       });
+
+      if (localPlayerStateRef.current) {
+        localPlayerStateRef.current.head = neutralHead;
+        localPlayerStateRef.current.blend = {};
+        localPlayerStateRef.current.tvHeadEnabled = false;
+        localPlayerStateRef.current.agoraVideoUid = undefined;
+      }
     };
 
     if (ui.cameraOn) {
@@ -287,22 +332,70 @@ function Room() {
           (value) => Math.round(value * 100) / 100
         ) as [number, number, number, number];
 
+        // CRITICAL: Only write face tracking data (head, blend) - NOT tvHeadEnabled
+        // tvHeadEnabled is written immediately when camera stream is obtained
         writeMyState({
           head: { q: quantizedHead },
           blend: quantizedBlend,
         }).catch((error) => {
           console.error('[Room] Failed to write face tracking state', error);
         });
+
+        // Keep local ref in sync so Avatar sees the values immediately
+        if (localPlayerStateRef.current) {
+          localPlayerStateRef.current.head = { q: quantizedHead };
+          localPlayerStateRef.current.blend = quantizedBlend;
+        }
       })
         .then((stream) => {
           setCameraStream(stream);
+          
+        // CRITICAL: Immediately write tvHeadEnabled to Playroom when camera stream is obtained
+        writeMyState({
+          tvHeadEnabled: true,
+          agoraVideoUid: myId,
+        })
+          .then(() => {
+            if (localPlayerStateRef.current) {
+              localPlayerStateRef.current.tvHeadEnabled = true;
+              localPlayerStateRef.current.agoraVideoUid = myId;
+            }
+            console.log('[Room] ✅ Wrote tvHeadEnabled=true to Playroom');
+          })
+          .catch((error) => {
+            console.error('[Room] Failed to write tvHeadEnabled state', error);
+          });
         })
         .catch((error) => {
           console.error('[Room] Failed to start face tracking', error);
+          // Ensure tv head state stays false if tracking fails
+          writeMyState({
+            tvHeadEnabled: false,
+            agoraVideoUid: undefined,
+          }).catch((writeErr) => {
+            console.error('[Room] Failed to clear tvHeadEnabled state after tracking failure', writeErr);
+          });
         });
     } else {
       stopFaceTracking();
       setCameraStream(null);
+      
+      // CRITICAL: Immediately clear tvHeadEnabled when camera is turned off
+      writeMyState({
+        tvHeadEnabled: false,
+        agoraVideoUid: undefined,
+      })
+        .then(() => {
+          if (localPlayerStateRef.current) {
+            localPlayerStateRef.current.tvHeadEnabled = false;
+            localPlayerStateRef.current.agoraVideoUid = undefined;
+          }
+          console.log('[Room] ✅ Wrote tvHeadEnabled=false to Playroom');
+        })
+        .catch((error) => {
+          console.error('[Room] Failed to clear tvHeadEnabled state', error);
+        });
+      
       sendNeutral();
       frameCounterRef.current = 0;
     }
@@ -417,7 +510,6 @@ function Room() {
           />
           {players.length > 0 ? (
             players.map(([id, playerState]) => {
-              console.log('[Room] Rendering Avatar for player:', id, 'state:', playerState);
               return (
                 <Avatar 
                   key={id} 

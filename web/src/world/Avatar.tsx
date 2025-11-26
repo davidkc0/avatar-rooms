@@ -8,12 +8,13 @@ import {
   AbstractMesh,
 } from '@babylonjs/core';
 import { MeshBuilder } from '@babylonjs/core/Meshes';
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, memo, useState } from 'react';
 import { createSimpleAvatar, type SimpleAvatar } from '../avatars/simpleAvatar';
 import { createRpmAvatar, type RpmAvatar } from '../avatars/rpmAvatar';
 import type { PlayerState } from '../multiplayer/playroom';
 import { useScene } from './scene';
 import { useVideoStore } from '../state/videoStore';
+import '../utils/helpers'; // Import to ensure hashCode is available
 
 type AvatarProps = {
   playerId: string;
@@ -33,16 +34,26 @@ type InterpolatedState = {
 
 type AvatarInstance = SimpleAvatar | (RpmAvatar & { kind?: 'rpm' });
 
-export function Avatar({ playerId, player, isLocal = false, videoElement, getLocalState }: AvatarProps) {
+function AvatarComponent({ playerId, player, isLocal = false, videoElement, getLocalState }: AvatarProps) {
   const { scene } = useScene();
   const avatarRef = useRef<AvatarInstance | null>(null);
   const playerStateRef = useRef(player);
   const interpolatedRef = useRef<InterpolatedState | null>(null);
   const targetStateRef = useRef<PlayerState>(player);
   const disposedRef = useRef(false);
+  const [avatarReady, setAvatarReady] = useState(false);
   const remoteVideoElement = useVideoStore((state) => state.remoteVideos[playerId]);
   const effectiveVideoElement = isLocal ? videoElement : remoteVideoElement;
+  
+  // Debug logging for remote video lookup
+  useEffect(() => {
+    if (!isLocal && playerId) {
+      const hasVideo = !!remoteVideoElement;
+      console.log(`[Avatar] Player ${playerId} remote video:`, hasVideo ? 'found' : 'not found');
+    }
+  }, [isLocal, playerId, remoteVideoElement]);
 
+  // Update refs when player prop changes (for remote players to see updates)
   playerStateRef.current = player;
   targetStateRef.current = player;
 
@@ -178,6 +189,7 @@ export function Avatar({ playerId, player, isLocal = false, videoElement, getLoc
         };
 
         avatarRef.current = avatar;
+        setAvatarReady(true); // Signal that avatar is ready!
         console.log('[Avatar] Avatar created for player:', playerId, 'isRPM:', !!(player.avatarUrl && (avatar as any).kind === 'rpm'));
 
         if (video && (avatar as any).head) {
@@ -192,9 +204,11 @@ export function Avatar({ playerId, player, isLocal = false, videoElement, getLoc
           fallbackAvatar.root.position = new Vector3(player.pos.x, player.pos.y, player.pos.z);
           fallbackAvatar.root.rotation.y = player.rotY;
           avatarRef.current = fallbackAvatar;
+          setAvatarReady(true); // Signal that fallback avatar is ready too
           console.log('[Avatar] Created fallback simple avatar for player:', playerId);
         } catch (fallbackError) {
           console.error('[Avatar] Even fallback avatar failed:', fallbackError);
+          setAvatarReady(false);
         }
       }
     })();
@@ -202,6 +216,7 @@ export function Avatar({ playerId, player, isLocal = false, videoElement, getLoc
     return () => {
       disposed = true;
       disposedRef.current = true;
+      setAvatarReady(false); // Reset on unmount
       console.log('[Avatar] Disposing avatar for player:', playerId);
       if (avatarRef.current) {
         avatarRef.current.root.dispose();
@@ -212,30 +227,88 @@ export function Avatar({ playerId, player, isLocal = false, videoElement, getLoc
 
   // Separate effect to handle video updates
   useEffect(() => {
+    console.log(`[Avatar] Video effect triggered for ${playerId}`, {
+      hasAvatar: !!avatarRef.current,
+      avatarReady,
+      isLocal,
+      tvHeadEnabled: player.tvHeadEnabled,
+      agoraVideoUid: player.agoraVideoUid,
+    });
+    
     const avatar = avatarRef.current;
-
-    if (!avatar) {
+    if (!avatar || !avatarReady) {
+      console.log(`[Avatar] No avatar yet or not ready for ${playerId}`, { hasAvatar: !!avatar, avatarReady });
       disposeCameraFacePlane();
       return;
     }
 
     const headNode = (avatar as any).head;
     if (!headNode) {
+      console.log(`[Avatar] No head node for ${playerId}`);
       disposeCameraFacePlane();
       return;
     }
 
-    if (!effectiveVideoElement) {
-      disposeCameraFacePlane();
-      return;
+    // For local player, use the passed video element
+    if (isLocal && effectiveVideoElement) {
+      console.log(`[Avatar] Using local video for ${playerId}`);
+      createCameraFacePlane(headNode, effectiveVideoElement);
+      return () => {
+        disposeCameraFacePlane();
+      };
     }
 
-    createCameraFacePlane(headNode, effectiveVideoElement);
+    // For remote player, look up by agoraVideoUid
+    if (!isLocal) {
+      console.log(`[Avatar] Remote player ${playerId} - checking for TV head`, {
+        tvHeadEnabled: player.tvHeadEnabled,
+        agoraVideoUid: player.agoraVideoUid,
+      });
+      
+      if (player.tvHeadEnabled) {
+        console.log(`[Avatar] TV head enabled for ${playerId}, looking up video...`);
+        
+        const storeVideos = useVideoStore.getState().remoteVideos;
+        console.log('[Avatar] Available remote videos:', Object.keys(storeVideos));
+        
+        let videoEl: HTMLVideoElement | undefined;
+        
+        // Try to find video by agoraVideoUid (as string)
+        if (player.agoraVideoUid !== undefined) {
+          const uidString = String(player.agoraVideoUid);
+          videoEl = storeVideos[uidString];
+          console.log(`[Avatar] Tried lookup with UID "${uidString}":`, !!videoEl);
+        }
+        
+        // Fallback: try by playerId
+        if (!videoEl) {
+          videoEl = storeVideos[playerId];
+          console.log(`[Avatar] Tried lookup with playerId "${playerId}":`, !!videoEl);
+        }
+        
+        if (videoEl) {
+          console.log(`[Avatar] ✅ Found remote video for ${playerId}!`);
+          createCameraFacePlane(headNode, videoEl);
+          return () => {
+            disposeCameraFacePlane();
+          };
+        } else {
+          console.warn(`[Avatar] ❌ No remote video found for ${playerId}`, {
+            agoraVideoUid: player.agoraVideoUid,
+            availableKeys: Object.keys(storeVideos),
+          });
+        }
+      } else {
+        console.log(`[Avatar] TV head NOT enabled for ${playerId}`, {
+          tvHeadEnabled: player.tvHeadEnabled,
+          playerState: player,
+        });
+      }
+    }
 
-    return () => {
-      disposeCameraFacePlane();
-    };
-  }, [effectiveVideoElement, createCameraFacePlane, disposeCameraFacePlane]);
+    // No video available
+    disposeCameraFacePlane();
+  }, [isLocal, effectiveVideoElement, player.tvHeadEnabled, player.agoraVideoUid, playerId, createCameraFacePlane, disposeCameraFacePlane, avatarReady]);
 
   // Update avatar position, rotation, and head rotation each frame
   useEffect(() => {
@@ -278,22 +351,26 @@ export function Avatar({ playerId, player, isLocal = false, videoElement, getLoc
 
       // Head rotation (apply quaternion to head mesh)
       if (state.head?.q && (avatar as any).head) {
-        const targetQ = Quaternion.FromArray(state.head.q);
-        const lerpFactor = Math.min(1, deltaTime / INTERPOLATION_TIME);
-        Quaternion.SlerpToRef(
-          interpolated.headQ,
-          targetQ,
-          lerpFactor,
-          interpolated.headQ
-        );
-        
-        // Apply rotation to head mesh
-        const headNode: any = (avatar as any).head;
-        if (headNode) {
-          if (!headNode.rotationQuaternion) {
-            headNode.rotationQuaternion = Quaternion.Identity();
+        // Validate quaternion - check if all values are valid numbers
+        const q = state.head.q;
+        if (q && q.length === 4 && q.every((v: any) => typeof v === 'number' && !isNaN(v))) {
+          const targetQ = Quaternion.FromArray(q);
+          const lerpFactor = Math.min(1, deltaTime / INTERPOLATION_TIME);
+          Quaternion.SlerpToRef(
+            interpolated.headQ,
+            targetQ,
+            lerpFactor,
+            interpolated.headQ
+          );
+          
+          // Apply rotation to head mesh
+          const headNode: any = (avatar as any).head;
+          if (headNode) {
+            if (!headNode.rotationQuaternion) {
+              headNode.rotationQuaternion = Quaternion.Identity();
+            }
+            headNode.rotationQuaternion.copyFrom(interpolated.headQ);
           }
-          headNode.rotationQuaternion.copyFrom(interpolated.headQ);
         }
       }
 
@@ -380,3 +457,24 @@ export function Avatar({ playerId, player, isLocal = false, videoElement, getLoc
 
   return null;
 }
+
+// Memoize Avatar to prevent unnecessary re-renders when props haven't changed
+export const Avatar = memo(AvatarComponent, (prevProps, nextProps) => {
+  // Custom comparison: only re-render if meaningful props changed
+  return (
+    prevProps.playerId === nextProps.playerId &&
+    prevProps.isLocal === nextProps.isLocal &&
+    prevProps.videoElement === nextProps.videoElement &&
+    prevProps.getLocalState === nextProps.getLocalState &&
+    // Deep comparison of player state (only check key properties)
+    prevProps.player.pos.x === nextProps.player.pos.x &&
+    prevProps.player.pos.y === nextProps.player.pos.y &&
+    prevProps.player.pos.z === nextProps.player.pos.z &&
+    prevProps.player.rotY === nextProps.player.rotY &&
+    prevProps.player.anim === nextProps.player.anim &&
+    prevProps.player.avatarUrl === nextProps.player.avatarUrl &&
+    prevProps.player.tvHeadEnabled === nextProps.player.tvHeadEnabled &&
+    prevProps.player.agoraVideoUid === nextProps.player.agoraVideoUid
+    // Note: head rotation and blend shapes are updated via refs, so we don't need to compare them
+  );
+});
