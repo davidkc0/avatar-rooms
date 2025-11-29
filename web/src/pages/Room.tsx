@@ -202,9 +202,19 @@ function Room() {
 
     return () => {
       mountedRef.current = false;
+
+      // Unsubscribe from Playroom state
       if (unsubscribe) {
         unsubscribe();
       }
+
+      // Clear local world / player state so avatars are removed immediately
+      worldStateRef.current = { players: {} };
+      worldRef.current = { players: {} };
+      localPlayerStateRef.current = null;
+      setWorld({ players: {} });
+      setMyId('none');
+
       stopHeartbeat();
       disconnectFromRoom();
     };

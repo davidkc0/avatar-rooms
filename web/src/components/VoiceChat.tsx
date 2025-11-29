@@ -30,6 +30,7 @@ export const VoiceChat = ({
   const channelParameters = useRef<ChannelParams>({}).current;
   const hasJoinedRef = useRef(false);
   const joinPromiseRef = useRef<Promise<boolean | string> | null>(null);
+  const joinTimeRef = useRef<number | null>(null);
   const remoteVideoElements = useRef<Map<string, HTMLVideoElement>>(new Map());
   const [remoteTrack, setRemoteTrack] = useState<any>(null);
   const agoraClient = useRef<any>(null);
@@ -206,12 +207,16 @@ export const VoiceChat = ({
         // mic state based on result
         setMicAllowed(joined);
         if (joined) {
+          joinTimeRef.current = Date.now();
           setEngineReadyToken((v) => v + 1);
+        } else {
+          joinTimeRef.current = null;
         }
     } catch (err) {
         console.error("Failed to start voice chat", err);
         joinPromiseRef.current = null;
         hasJoinedRef.current = false;
+        joinTimeRef.current = null;
     }
   };
 
@@ -242,6 +247,7 @@ export const VoiceChat = ({
         agoraClient.current.leave(channelParameters);
       }
       hasJoinedRef.current = false;
+      joinTimeRef.current = null;
     };
   }, [uid, roomCode]);
 
@@ -276,6 +282,18 @@ export const VoiceChat = ({
     const publishVideo = async () => {
       if (!hasJoinedRef.current) {
         console.log('[VoiceChat] Skipping video publish: not joined yet');
+        return;
+      }
+
+      // Give Agora a bit of time after join before first video publish to avoid
+      // INVALID_OPERATION: Can't publish stream, haven't joined yet!
+      if (joinTimeRef.current !== null && Date.now() - joinTimeRef.current < 1500) {
+        console.log('[VoiceChat] Delaying video publish until join is fully settled');
+        if (!cancelled) {
+          setTimeout(() => {
+            setVideoRetryToken((token) => token + 1);
+          }, 500);
+        }
         return;
       }
 

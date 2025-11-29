@@ -141,7 +141,7 @@ export function subscribeState(cb: (s: WorldState) => void): () => void {
       const stored =
         (me.getState(PLAYER_STATE_KEY) as PlayerState) ?? defaultPlayer();
       players[me.id] = stored;
-    }
+        }
 
     if (!disposed) {
       cb({ players });
@@ -162,8 +162,8 @@ export function subscribeState(cb: (s: WorldState) => void): () => void {
         }) ?? null;
     })
     .catch((error) => {
-      console.error('[playroom] Failed to subscribe to state', error);
-    });
+    console.error('[playroom] Failed to subscribe to state', error);
+  });
 
   return () => {
     disposed = true;

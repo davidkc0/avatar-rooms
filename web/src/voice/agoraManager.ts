@@ -14,7 +14,8 @@ const AgoraManager = async (eventsCallback: (event: string, ...args: any[]) => v
   let agoraEngine: IAgoraRTCClient | null = null;
 
   const setupAgoraEngine = async () => {
-    agoraEngine = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
+    // Use H.264 for maximum compatibility with iOS WebView/Safari
+    agoraEngine = AgoraRTC.createClient({ mode: 'rtc', codec: 'h264' });
   };
   await setupAgoraEngine();
 

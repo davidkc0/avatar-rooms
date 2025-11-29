@@ -254,7 +254,7 @@ function AvatarComponent({ playerId, player, isLocal = false, videoElement, getL
       console.log(`[Avatar] Using local video for ${playerId}`);
       createCameraFacePlane(headNode, effectiveVideoElement);
       return () => {
-        disposeCameraFacePlane();
+      disposeCameraFacePlane();
       };
     }
 
@@ -289,9 +289,9 @@ function AvatarComponent({ playerId, player, isLocal = false, videoElement, getL
         if (videoEl) {
           console.log(`[Avatar] ✅ Found remote video for ${playerId}!`);
           createCameraFacePlane(headNode, videoEl);
-          return () => {
-            disposeCameraFacePlane();
-          };
+    return () => {
+      disposeCameraFacePlane();
+    };
         } else {
           console.warn(`[Avatar] ❌ No remote video found for ${playerId}`, {
             agoraVideoUid: player.agoraVideoUid,
@@ -355,21 +355,21 @@ function AvatarComponent({ playerId, player, isLocal = false, videoElement, getL
         const q = state.head.q;
         if (q && q.length === 4 && q.every((v: any) => typeof v === 'number' && !isNaN(v))) {
           const targetQ = Quaternion.FromArray(q);
-          const lerpFactor = Math.min(1, deltaTime / INTERPOLATION_TIME);
-          Quaternion.SlerpToRef(
-            interpolated.headQ,
-            targetQ,
-            lerpFactor,
-            interpolated.headQ
-          );
-          
-          // Apply rotation to head mesh
-          const headNode: any = (avatar as any).head;
-          if (headNode) {
-            if (!headNode.rotationQuaternion) {
-              headNode.rotationQuaternion = Quaternion.Identity();
-            }
-            headNode.rotationQuaternion.copyFrom(interpolated.headQ);
+        const lerpFactor = Math.min(1, deltaTime / INTERPOLATION_TIME);
+        Quaternion.SlerpToRef(
+          interpolated.headQ,
+          targetQ,
+          lerpFactor,
+          interpolated.headQ
+        );
+        
+        // Apply rotation to head mesh
+        const headNode: any = (avatar as any).head;
+        if (headNode) {
+          if (!headNode.rotationQuaternion) {
+            headNode.rotationQuaternion = Quaternion.Identity();
+          }
+          headNode.rotationQuaternion.copyFrom(interpolated.headQ);
           }
         }
       }
