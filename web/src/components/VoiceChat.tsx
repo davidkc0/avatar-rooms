@@ -120,10 +120,74 @@ export const VoiceChat = ({
     setRemoteVideo(playerId, null);
   };
 
+  // Helper function to check and subscribe to remote user's video
+  const checkAndSubscribeRemoteUser = async (remoteUser: any, engine: any) => {
+    const remoteUid = String(remoteUser.uid);
+    
+    // Skip our own user
+    if (remoteUid === String(uid)) {
+      return;
+    }
+    
+    console.log('[VoiceChat] 📋 Processing remote user:', remoteUid, {
+      hasVideo: !!remoteUser.hasVideo,
+      hasAudio: !!remoteUser.hasAudio,
+      videoTrack: !!remoteUser.videoTrack,
+      audioTrack: !!remoteUser.audioTrack,
+    });
+    
+    // Subscribe to video if available but not yet subscribed
+    if (remoteUser.hasVideo && !remoteUser.videoTrack) {
+      console.log('[VoiceChat] 📹 Subscribing to existing user video:', remoteUid);
+      try {
+        await engine.subscribe(remoteUser, 'video');
+        console.log('[VoiceChat] ✅ Subscribed to video for:', remoteUid);
+        // Small delay to ensure track is ready
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attachRemoteVideo(remoteUser);
+      } catch (err) {
+        console.error('[VoiceChat] ❌ Failed to subscribe to video:', err);
+      }
+    } else if (remoteUser.videoTrack) {
+      // Video track already available, attach it directly
+      console.log('[VoiceChat] ✅ Video track already available for:', remoteUid);
+      attachRemoteVideo(remoteUser);
+    }
+    
+    // Subscribe to audio if available
+    if (remoteUser.hasAudio && !remoteUser.audioTrack) {
+      try {
+        await engine.subscribe(remoteUser, 'audio');
+        setRemoteTrack(remoteUser.audioTrack);
+      } catch (err) {
+        console.error('[VoiceChat] ❌ Failed to subscribe to audio:', err);
+      }
+    } else if (remoteUser.audioTrack) {
+      setRemoteTrack(remoteUser.audioTrack);
+    }
+  };
+
   const handleVSDKEvents = (eventName: string, ...args: any[]) => {
     console.log('[VoiceChat] 🔔 Event:', eventName, 'Args:', args);
     
     switch (eventName) {
+      case 'user-joined':
+        // When a user joins, check if they have published media
+        const joinedUser = args[0];
+        const joinedUid = String(joinedUser.uid);
+        
+        if (joinedUid === String(uid)) {
+          return; // Skip self
+        }
+        
+        console.log('[VoiceChat] 👤 User joined:', joinedUid);
+        // Check for existing published tracks
+        const engine = agoraClient.current?.getAgoraEngine();
+        if (engine) {
+          checkAndSubscribeRemoteUser(joinedUser, engine);
+        }
+        break;
+        
       case 'user-published':
         const remoteUid = args[0].uid;
         
@@ -160,6 +224,14 @@ export const VoiceChat = ({
         
         console.log('[VoiceChat] 📴 Remote user unpublished:', unpublishUid);
         detachRemoteVideo(String(unpublishUid));
+        break;
+        
+      case 'user-left':
+        const leftUid = args[0]?.uid;
+        if (String(leftUid) !== String(uid)) {
+          console.log('[VoiceChat] 👋 User left:', leftUid);
+          detachRemoteVideo(String(leftUid));
+        }
         break;
     }
   };
@@ -209,6 +281,36 @@ export const VoiceChat = ({
         if (joined) {
           joinTimeRef.current = Date.now();
           setEngineReadyToken((v) => v + 1);
+          
+          // CRITICAL: Check for existing remote users who may have already published
+          // This handles the case where we join after other users have published
+          // We check multiple times with delays because remoteUsers might not be populated immediately
+          const engine = agoraClient.current?.getAgoraEngine();
+          if (engine) {
+            const checkRemoteUsers = async (attempt = 1, maxAttempts = 5) => {
+              // Wait a bit for Agora to populate remoteUsers (increases with each attempt)
+              await new Promise(resolve => setTimeout(resolve, 200 * attempt));
+              
+              const remoteUsers = engine.remoteUsers;
+              console.log(`[VoiceChat] 🔍 Checking for existing remote users (attempt ${attempt}/${maxAttempts}):`, remoteUsers.length);
+              
+              if (remoteUsers.length > 0) {
+                // Process all remote users
+                for (const remoteUser of remoteUsers) {
+                  await checkAndSubscribeRemoteUser(remoteUser, engine);
+                }
+              } else if (attempt < maxAttempts) {
+                // Retry if no users found yet
+                console.log('[VoiceChat] ⏳ No remote users yet, retrying...');
+                checkRemoteUsers(attempt + 1, maxAttempts);
+              } else {
+                console.log('[VoiceChat] ✅ Finished checking for remote users');
+              }
+            };
+            
+            // Start checking immediately and with retries
+            checkRemoteUsers();
+          }
         } else {
           joinTimeRef.current = null;
         }

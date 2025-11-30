@@ -216,7 +216,11 @@ function Room() {
       setMyId('none');
 
       stopHeartbeat();
-      disconnectFromRoom();
+      
+      // Disconnect from Playroom (this will clear our state for other clients)
+      disconnectFromRoom().catch((error) => {
+        console.error('[Room] Error disconnecting from room:', error);
+      });
     };
   }, [slug]);
 

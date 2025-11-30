@@ -130,18 +130,21 @@ export function subscribeState(cb: (s: WorldState) => void): () => void {
     const players: Record<string, PlayerState> = {};
 
     participants.forEach((player) => {
-      const stored =
-        (player.getState(PLAYER_STATE_KEY) as PlayerState) ?? defaultPlayer();
-      players[player.id] = stored;
+      const stored = player.getState(PLAYER_STATE_KEY) as PlayerState | null;
+      // Only include players with valid state (filter out null states from disconnected players)
+      if (stored) {
+        players[player.id] = stored;
+      }
     });
 
     // Include self even if not in participants yet
     const me = pk.myPlayer();
     if (me && !players[me.id]) {
-      const stored =
-        (me.getState(PLAYER_STATE_KEY) as PlayerState) ?? defaultPlayer();
-      players[me.id] = stored;
-        }
+      const stored = me.getState(PLAYER_STATE_KEY) as PlayerState | null;
+      if (stored) {
+        players[me.id] = stored;
+      }
+    }
 
     if (!disposed) {
       cb({ players });
@@ -199,7 +202,35 @@ export async function writeMyState(partial: Partial<PlayerState>) {
   lastWriteAt = Date.now();
 }
 
-export function disconnectFromRoom() {
+// Helper for updating specific fields (used by VoiceChat)
+export async function updateMyNode(updater: (state: PlayerState) => PlayerState) {
+  const pk = await getPlayroomkit();
+  const player = pk.myPlayer();
+  if (!player) return;
+
+  const current =
+    (player.getState(PLAYER_STATE_KEY) as PlayerState) ?? defaultPlayer();
+  const updated = updater(current);
+  
+  player.setState(PLAYER_STATE_KEY, updated, true);
+  lastWriteAt = Date.now();
+}
+
+export async function disconnectFromRoom() {
+  try {
+    // Clear player state from Playroom before disconnecting
+    const pk = await getPlayroomkit();
+    const player = pk.myPlayer();
+    
+    if (player) {
+      // Set state to null to signal removal
+      player.setState(PLAYER_STATE_KEY, null, true);
+      console.log('[playroom] Cleared player state before disconnect');
+    }
+  } catch (error) {
+    console.error('[playroom] Error clearing state on disconnect:', error);
+  }
+  
   MY_ID = null;
   ROOM_CODE_IN_USE = 'plaza';
   lastWriteAt = 0;

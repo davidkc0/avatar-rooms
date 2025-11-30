@@ -85,14 +85,14 @@ const useBabylon = () => {
       sceneInstance
     );
     const groundMaterial = new StandardMaterial('ground-mat', sceneInstance);
-    groundMaterial.diffuseColor = { r: 0.2, g: 0.2, b: 0.2, a: 1 } as any; // Dark gray
-    const gridTexture = new Texture(
-      'https://assets.babylonjs.com/environments/tile1.jpg',
+    groundMaterial.diffuseColor = { r: 0.4, g: 0.3, b: 0.2, a: 1 } as any; // Warm wood tone
+    const woodTexture = new Texture(
+      '/wood-floor.jpg',
       sceneInstance
     );
-    gridTexture.uScale = 10;
-    gridTexture.vScale = 10;
-    groundMaterial.diffuseTexture = gridTexture;
+    woodTexture.uScale = 4; // Adjust based on your texture - lower = larger tiles
+    woodTexture.vScale = 4;
+    groundMaterial.diffuseTexture = woodTexture;
     ground.material = groundMaterial;
 
     // Reference cubes

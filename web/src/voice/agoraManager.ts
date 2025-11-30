@@ -21,6 +21,11 @@ const AgoraManager = async (eventsCallback: (event: string, ...args: any[]) => v
 
   if (!agoraEngine) throw new Error("Failed to create Agora client");
 
+  agoraEngine.on('user-joined', (user) => {
+    console.log('[AgoraManager] user-joined - UID:', user.uid);
+    eventsCallback('user-joined', user);
+  });
+
   agoraEngine.on('user-published', async (user, mediaType) => {
     console.log('[AgoraManager] user-published - UID:', user.uid, 'mediaType:', mediaType);
     await agoraEngine!.subscribe(user, mediaType);
@@ -31,6 +36,11 @@ const AgoraManager = async (eventsCallback: (event: string, ...args: any[]) => v
   agoraEngine.on('user-unpublished', (user) => {
     console.log(user.uid + ' has left the channel');
     eventsCallback('user-unpublished', user);
+  });
+
+  agoraEngine.on('user-left', (user) => {
+    console.log('[AgoraManager] user-left - UID:', user.uid);
+    eventsCallback('user-left', user);
   });
 
   const getAgoraEngine = () => agoraEngine;
