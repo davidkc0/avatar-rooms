@@ -87,7 +87,7 @@ const useBabylon = () => {
     const groundMaterial = new StandardMaterial('ground-mat', sceneInstance);
     groundMaterial.diffuseColor = { r: 0.4, g: 0.3, b: 0.2, a: 1 } as any; // Warm wood tone
     const woodTexture = new Texture(
-      '/wood-floor.jpg',
+      '/wood_floor_worn_diff_4k.jpg',
       sceneInstance
     );
     woodTexture.uScale = 4; // Adjust based on your texture - lower = larger tiles

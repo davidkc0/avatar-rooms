@@ -40,6 +40,7 @@ export const VoiceChat = ({
   const [engineReadyToken, setEngineReadyToken] = useState(0);
   const [videoRetryToken, setVideoRetryToken] = useState(0);
   const setRemoteVideo = useVideoStore((state) => state.setRemoteVideo);
+  const processedUsersRef = useRef<Set<string>>(new Set()); // Track users we've processed
 
   const attachRemoteVideo = (user: any) => {
     console.log('[VoiceChat] 🎬 attachRemoteVideo called for user:', user.uid);
@@ -68,30 +69,67 @@ export const VoiceChat = ({
       readyState: mediaTrack.readyState,
     });
     
-    const stream = new MediaStream([mediaTrack]);
+    // CRITICAL FOR iOS: Create video element with proper attributes BEFORE setting srcObject
     const video = document.createElement('video');
-    video.style.position = 'absolute';
-    video.style.left = '-9999px';
-    video.style.width = '320px'; // Changed from 1px for debugging
-    video.style.height = '320px'; // Changed from 1px for debugging
+    
+    // iOS WebView requires these to be set via setAttribute, not just properties
+    video.setAttribute('autoplay', '');
+    video.setAttribute('muted', 'true');
+    video.setAttribute('playsinline', ''); // lowercase for iOS
+    video.setAttribute('webkit-playsinline', ''); // iOS WebKit compatibility
+    
+    // Set properties as well
     video.autoplay = true;
     video.muted = true;
     video.playsInline = true;
-    video.srcObject = stream;
+    
+    // Style for hidden playback
+    video.style.position = 'absolute';
+    video.style.left = '-9999px';
+    video.style.width = '320px';
+    video.style.height = '320px';
+    
+    // Add to DOM FIRST (iOS requirement)
     document.body.appendChild(video);
     
-    video.play()
-      .then(() => {
+    // THEN set srcObject (iOS WebView needs element in DOM first)
+    const stream = new MediaStream([mediaTrack]);
+    video.srcObject = stream;
+    
+    // iOS needs explicit play() call, wait a moment for stream to be ready
+    const playVideo = async () => {
+      try {
+        // Wait for video to have enough data
+        if (video.readyState < 2) {
+          await new Promise((resolve) => {
+            video.addEventListener('loadeddata', resolve, { once: true });
+            // Timeout after 2 seconds
+            setTimeout(resolve, 2000);
+          });
+        }
+        
+        await video.play();
         console.log('[VoiceChat] ✅ Video playing:', {
           uid: user.uid,
           videoWidth: video.videoWidth,
           videoHeight: video.videoHeight,
           readyState: video.readyState,
         });
-      })
-      .catch((err) => {
+      } catch (err) {
         console.error('[VoiceChat] ❌ Failed to play video:', err);
-      });
+        // Retry once after a delay (iOS sometimes needs this)
+        setTimeout(async () => {
+          try {
+            await video.play();
+            console.log('[VoiceChat] ✅ Video playing on retry');
+          } catch (retryErr) {
+            console.error('[VoiceChat] ❌ Failed to play video on retry:', retryErr);
+          }
+        }, 500);
+      }
+    };
+    
+    playVideo();
     
     // Store by the string UID directly (as received from Agora)
     const uidKey = String(user.uid);
@@ -121,12 +159,18 @@ export const VoiceChat = ({
   };
 
   // Helper function to check and subscribe to remote user's video
-  const checkAndSubscribeRemoteUser = async (remoteUser: any, engine: any) => {
+  // Returns true if successfully subscribed/attached, false if needs retry
+  const checkAndSubscribeRemoteUser = async (remoteUser: any, engine: any): Promise<boolean> => {
     const remoteUid = String(remoteUser.uid);
     
     // Skip our own user
     if (remoteUid === String(uid)) {
-      return;
+      return true; // Consider self as "processed"
+    }
+    
+    // If we already have the video attached, skip
+    if (remoteVideoElements.current.has(remoteUid)) {
+      return true;
     }
     
     console.log('[VoiceChat] 📋 Processing remote user:', remoteUid, {
@@ -136,35 +180,71 @@ export const VoiceChat = ({
       audioTrack: !!remoteUser.audioTrack,
     });
     
-    // Subscribe to video if available but not yet subscribed
-    if (remoteUser.hasVideo && !remoteUser.videoTrack) {
-      console.log('[VoiceChat] 📹 Subscribing to existing user video:', remoteUid);
+    // If video track already exists, attach it immediately
+    if (remoteUser.videoTrack) {
+      console.log('[VoiceChat] ✅ Video track already available for:', remoteUid);
+      attachRemoteVideo(remoteUser);
+      processedUsersRef.current.add(remoteUid);
+      return true;
+    }
+    
+    // If user has video but track not ready, try to subscribe
+    if (remoteUser.hasVideo) {
+      console.log('[VoiceChat] 📹 User has video, attempting to subscribe:', remoteUid);
       try {
         await engine.subscribe(remoteUser, 'video');
         console.log('[VoiceChat] ✅ Subscribed to video for:', remoteUid);
-        // Small delay to ensure track is ready
-        await new Promise(resolve => setTimeout(resolve, 100));
-        attachRemoteVideo(remoteUser);
-      } catch (err) {
-        console.error('[VoiceChat] ❌ Failed to subscribe to video:', err);
+        
+        // Wait for track to be ready - iOS needs more time
+        let attempts = 0;
+        while (!remoteUser.videoTrack && attempts < 10) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          attempts++;
+        }
+        
+        if (remoteUser.videoTrack) {
+          console.log('[VoiceChat] ✅ Video track ready after subscribe:', remoteUid);
+          attachRemoteVideo(remoteUser);
+          processedUsersRef.current.add(remoteUid);
+          return true;
+        } else {
+          console.warn('[VoiceChat] ⚠️ Video track not ready after subscribe:', remoteUid);
+          // Don't mark as processed, will retry
+          return false;
+        }
+      } catch (err: any) {
+        // If "user is not published", this is expected on iOS - retry later
+        if (err.code === 'INVALID_REMOTE_USER' || err.message?.includes('not published')) {
+          console.log('[VoiceChat] ⏳ User not published yet, will retry:', remoteUid);
+          return false; // Signal to retry
+        } else {
+          console.error('[VoiceChat] ❌ Failed to subscribe to video:', err);
+          return false; // Retry on other errors too
+        }
       }
-    } else if (remoteUser.videoTrack) {
-      // Video track already available, attach it directly
-      console.log('[VoiceChat] ✅ Video track already available for:', remoteUid);
-      attachRemoteVideo(remoteUser);
     }
     
     // Subscribe to audio if available
     if (remoteUser.hasAudio && !remoteUser.audioTrack) {
       try {
         await engine.subscribe(remoteUser, 'audio');
-        setRemoteTrack(remoteUser.audioTrack);
+        if (remoteUser.audioTrack) {
+          setRemoteTrack(remoteUser.audioTrack);
+        }
       } catch (err) {
         console.error('[VoiceChat] ❌ Failed to subscribe to audio:', err);
       }
     } else if (remoteUser.audioTrack) {
       setRemoteTrack(remoteUser.audioTrack);
     }
+    
+    // If user doesn't have video, mark as processed (nothing to do)
+    if (!remoteUser.hasVideo) {
+      processedUsersRef.current.add(remoteUid);
+      return true;
+    }
+    
+    return false; // Needs retry
   };
 
   const handleVSDKEvents = (eventName: string, ...args: any[]) => {
@@ -180,11 +260,27 @@ export const VoiceChat = ({
           return; // Skip self
         }
         
-        console.log('[VoiceChat] 👤 User joined:', joinedUid);
-        // Check for existing published tracks
+        console.log('[VoiceChat] 👤 User joined:', joinedUid, {
+          hasVideo: joinedUser.hasVideo,
+          hasAudio: joinedUser.hasAudio,
+          videoTrack: !!joinedUser.videoTrack,
+        });
+        
+        // On iOS, user-published might not fire for existing users
+        // Check if they have video and subscribe if needed
         const engine = agoraClient.current?.getAgoraEngine();
         if (engine) {
-          checkAndSubscribeRemoteUser(joinedUser, engine);
+          // Check immediately, then retry after a delay if needed
+          checkAndSubscribeRemoteUser(joinedUser, engine).then((success) => {
+            if (!success) {
+              // Retry after delay if subscription failed
+              setTimeout(() => {
+                if (hasJoinedRef.current) {
+                  checkAndSubscribeRemoteUser(joinedUser, engine);
+                }
+              }, 1000);
+            }
+          });
         }
         break;
         
@@ -204,12 +300,22 @@ export const VoiceChat = ({
           hasAudioTrack: !!args[0].audioTrack,
         });
         
+        // AgoraManager already subscribed, so track should be available
         if (args[1] === 'audio') {
           setRemoteTrack(args[0].audioTrack);
         }
         if (args[1] === 'video') {
+          // Check if we already have this video attached
+          const uidString = String(remoteUid);
+          if (!remoteVideoElements.current.has(uidString) && args[0].videoTrack) {
           console.log('[VoiceChat] 🎥 Video track detected, attaching...');
           attachRemoteVideo(args[0]);
+            processedUsersRef.current.add(uidString);
+          } else if (remoteVideoElements.current.has(uidString)) {
+            console.log('[VoiceChat] ℹ️ Video already attached for:', uidString);
+          } else {
+            console.warn('[VoiceChat] ⚠️ user-published for video but track not ready yet:', uidString);
+          }
         }
         break;
         
@@ -223,14 +329,18 @@ export const VoiceChat = ({
         }
         
         console.log('[VoiceChat] 📴 Remote user unpublished:', unpublishUid);
-        detachRemoteVideo(String(unpublishUid));
+        const unpublishUidString = String(unpublishUid);
+        detachRemoteVideo(unpublishUidString);
+        processedUsersRef.current.delete(unpublishUidString); // Allow reprocessing if they republish
         break;
         
       case 'user-left':
         const leftUid = args[0]?.uid;
         if (String(leftUid) !== String(uid)) {
           console.log('[VoiceChat] 👋 User left:', leftUid);
-          detachRemoteVideo(String(leftUid));
+          const leftUidString = String(leftUid);
+          detachRemoteVideo(leftUidString);
+          processedUsersRef.current.delete(leftUidString); // Clean up
         }
         break;
     }
@@ -284,10 +394,12 @@ export const VoiceChat = ({
           
           // CRITICAL: Check for existing remote users who may have already published
           // This handles the case where we join after other users have published
-          // We check multiple times with delays because remoteUsers might not be populated immediately
+          // On iOS, user-published events don't fire reliably, so we must check manually
           const engine = agoraClient.current?.getAgoraEngine();
           if (engine) {
-            const checkRemoteUsers = async (attempt = 1, maxAttempts = 5) => {
+            const checkRemoteUsers = async (attempt = 1, maxAttempts = 8) => {
+              if (!hasJoinedRef.current) return; // Don't check if we've left
+              
               // Wait a bit for Agora to populate remoteUsers (increases with each attempt)
               await new Promise(resolve => setTimeout(resolve, 200 * attempt));
               
@@ -296,8 +408,26 @@ export const VoiceChat = ({
               
               if (remoteUsers.length > 0) {
                 // Process all remote users
+                const needsRetry: string[] = [];
                 for (const remoteUser of remoteUsers) {
-                  await checkAndSubscribeRemoteUser(remoteUser, engine);
+                  const remoteUid = String(remoteUser.uid);
+                  // Skip if already successfully processed
+                  if (processedUsersRef.current.has(remoteUid)) {
+                    continue;
+                  }
+                  
+                  const success = await checkAndSubscribeRemoteUser(remoteUser, engine);
+                  if (!success) {
+                    needsRetry.push(remoteUid);
+                  }
+                }
+                
+                // If some users need retry and we haven't exceeded max attempts, retry
+                if (needsRetry.length > 0 && attempt < maxAttempts) {
+                  console.log('[VoiceChat] ⏳ Some users need retry:', needsRetry);
+                  checkRemoteUsers(attempt + 1, maxAttempts);
+                } else {
+                  console.log('[VoiceChat] ✅ Finished checking for remote users');
                 }
               } else if (attempt < maxAttempts) {
                 // Retry if no users found yet
@@ -350,6 +480,7 @@ export const VoiceChat = ({
       }
       hasJoinedRef.current = false;
       joinTimeRef.current = null;
+      processedUsersRef.current.clear();
     };
   }, [uid, roomCode]);
 

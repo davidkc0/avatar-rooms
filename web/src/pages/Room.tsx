@@ -1,9 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { getStoreValue } from '../utils/helpers';
 import { Avatar } from '../world/Avatar';
 import { SceneRoot, useScene } from '../world/scene';
+import { Walls } from '../world/Walls';
+import { Whiteboard } from '../world/Whiteboard';
+import { WhiteboardButton } from '../world/WhiteboardButton';
+import { WhiteboardCanvas } from '../components/WhiteboardCanvas';
+import { Furniture } from '../world/Furniture';
 import { Vector3 } from '@babylonjs/core';
+import { AbstractMesh, DynamicTexture } from '@babylonjs/core';
 import { PlayerController } from '../state/PlayerController';
 import {
   type PlayerState,
@@ -24,9 +30,10 @@ import '../utils/helpers'; // Import to ensure hashCode is available
 type LocalUiState = {
   cameraOn: boolean;
   faceBlur: boolean;
+  drawingMode: boolean;
 };
 
-const initialUi: LocalUiState = { cameraOn: true, faceBlur: false };
+const initialUi: LocalUiState = { cameraOn: true, faceBlur: false, drawingMode: false };
 
 const createFallbackPlayer = (): PlayerState => ({
   pos: { x: 0, y: 0, z: 0 },
@@ -55,14 +62,40 @@ function Room() {
   const [joystickInput] = useJoystickMovement();
   const localPlayerStateRef = useRef<PlayerState | null>(null);
   const mountedRef = useRef(true);
+  const [whiteboardMesh, setWhiteboardMesh] = useState<AbstractMesh | null>(null);
+  const drawingModeRef = useRef(false);
+  const whiteboardTextureRef = useRef<DynamicTexture | null>(null);
+  
+  // Update ref when drawing mode changes
+  useEffect(() => {
+    drawingModeRef.current = ui.drawingMode;
+  }, [ui.drawingMode]);
+
+  // Stable callbacks for whiteboard
+  const handleExitDrawingMode = useCallback(() => {
+    setUi(prev => ({ ...prev, drawingMode: false }));
+  }, []);
+
+  const handleToggleDrawingMode = useCallback(() => {
+    setUi(prev => ({ ...prev, drawingMode: !prev.drawingMode }));
+  }, []);
+
+  const handleTextureUpdated = useCallback(() => {
+    // Force a re-render or update to ensure texture is visible
+    console.log('[Room] Texture updated, forcing material refresh');
+  }, []);
 
   // Combine keyboard and joystick input (joystick takes priority)
+  // Disable movement when in drawing mode
   const movementInput: MovementInput = useMemo(() => {
+    if (ui.drawingMode) {
+      return { forward: 0, right: 0 }; // No movement in drawing mode
+    }
     if (joystickInput.forward !== 0 || joystickInput.right !== 0) {
       return joystickInput;
     }
     return keyboardInput;
-  }, [keyboardInput, joystickInput]);
+  }, [keyboardInput, joystickInput, ui.drawingMode]);
 
   useEffect(() => {
     worldRef.current = world;
@@ -291,6 +324,25 @@ function Room() {
   const leave = () => {
     navigate('/');
   };
+  
+  // Handle ESC key to exit drawing mode
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && ui.drawingMode) {
+        e.preventDefault();
+        e.stopPropagation();
+        console.log('[Room] ESC pressed, exiting drawing mode');
+        setUi(prev => ({ ...prev, drawingMode: false }));
+      }
+    };
+    
+    if (ui.drawingMode) {
+      window.addEventListener('keydown', handleKeyDown, true); // Use capture phase
+      return () => {
+        window.removeEventListener('keydown', handleKeyDown, true);
+      };
+    }
+  }, [ui.drawingMode]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -430,13 +482,25 @@ function Room() {
     const { scene, camera } = useScene();
     
     useEffect(() => {
-      if (myId === 'none') return;
+      if (myId === 'none' || !camera) return;
       
+      // Handle drawing mode - just disable camera controls (no zoom needed with full-screen overlay)
+      if (ui.drawingMode) {
+        // Disable camera controls in drawing mode
+        camera.detachControl();
+        return;
+      }
+      
+      // Re-enable camera controls when exiting drawing mode
+      const canvas = scene.getEngine().getRenderingCanvas();
+      if (canvas) {
+        camera.attachControl(canvas, true);
+      }
+      
+      // Normal camera follow
       const observer = scene.onBeforeRenderObservable.add(() => {
-        // Access localPlayerStateRef from parent scope
         const localState = localPlayerStateRef.current;
         if (localState && camera) {
-          // Update camera target to follow player (offset by 1.6 unit up for head level)
           camera.setTarget(new Vector3(localState.pos.x, localState.pos.y + 1.6, localState.pos.z));
         }
       });
@@ -444,7 +508,7 @@ function Room() {
       return () => {
         scene.onBeforeRenderObservable.remove(observer);
       };
-    }, [scene, camera, myId]);
+    }, [scene, camera, myId, ui.drawingMode]);
     
     return null;
   };
@@ -514,7 +578,45 @@ function Room() {
       </div>
 
       <div className="absolute inset-0">
+        
         <SceneRoot>
+          <Walls
+            onWhiteboardCreated={(mesh) => {
+              console.log('[Room] Whiteboard mesh created', mesh);
+              setWhiteboardMesh(mesh);
+            }}
+          />
+          <Furniture
+            modelPath="/"
+            modelName="arcade_machine.glb"
+            position={new Vector3(0, 0, 8)}
+            rotation={new Vector3(0, Math.PI, 0)}
+            scale={new Vector3(0.015, 0.015, 0.015)}
+          />
+          {whiteboardMesh && (
+            <>
+              <Whiteboard 
+                whiteboardMesh={whiteboardMesh} 
+                drawingMode={ui.drawingMode}
+                onExitDrawingMode={handleExitDrawingMode}
+                textureRef={whiteboardTextureRef}
+                onTextureUpdated={handleTextureUpdated}
+              />
+              {ui.drawingMode && (
+                <WhiteboardCanvas
+                  drawingMode={ui.drawingMode}
+                  onExitDrawingMode={handleExitDrawingMode}
+                  textureRef={whiteboardTextureRef}
+                  onTextureUpdated={handleTextureUpdated}
+                />
+              )}
+              <WhiteboardButton 
+                whiteboardMesh={whiteboardMesh}
+                onToggleDrawingMode={handleToggleDrawingMode}
+                isDrawingMode={ui.drawingMode}
+              />
+            </>
+          )}
           <CameraFollow />
           <PlayerController 
             myId={myId}

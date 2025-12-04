@@ -142,11 +142,27 @@ export function updatePosition(
   const moveX = Math.sin(newRotY) * finalSpeed;
   const moveZ = Math.cos(newRotY) * finalSpeed;
 
+  // Room bounds: 20x20 room, walls at x=±10, z=±10
+  // Player radius ~0.5, so keep player at least 0.5 units from walls
+  const ROOM_HALF = 10;
+  const PLAYER_RADIUS = 0.5;
+  const MIN_X = -ROOM_HALF + PLAYER_RADIUS;
+  const MAX_X = ROOM_HALF - PLAYER_RADIUS;
+  const MIN_Z = -ROOM_HALF + PLAYER_RADIUS;
+  const MAX_Z = ROOM_HALF - PLAYER_RADIUS;
+
+  let newX = current.x + moveX;
+  let newZ = current.z + moveZ;
+
+  // Clamp to room bounds
+  newX = Math.max(MIN_X, Math.min(MAX_X, newX));
+  newZ = Math.max(MIN_Z, Math.min(MAX_Z, newZ));
+
   return {
     pos: {
-      x: current.x + moveX,
+      x: newX,
       y: current.y,
-      z: current.z + moveZ,
+      z: newZ,
     },
     rotY: newRotY,
     anim: 'walk',
