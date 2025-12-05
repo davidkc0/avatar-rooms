@@ -128,3 +128,4 @@ export function ArcadeButton({ onToggleGame, isGameMode }: ArcadeButtonProps) {
 
   return null;
 }
+

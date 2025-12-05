@@ -68,7 +68,7 @@ export function Furniture({
             // Apply zOffset to materials to prevent z-fighting
             if (mesh.material) {
               const material = mesh.material as any;
-              material.zOffset = 1.0; // Much higher zOffset to prevent z-fighting
+              material.zOffset = 1.5; // Even higher zOffset to prevent z-fighting with negative scale
               material.backFaceCulling = false; // Disable back face culling
               // Mark material as always active to prevent flickering
               material.needDepthPrePass = true;
@@ -114,3 +114,4 @@ export function Furniture({
 
   return null;
 }
+

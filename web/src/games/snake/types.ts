@@ -27,3 +27,4 @@ export type SnakeGameState = {
   speed: number;
   level: number;
 };
+

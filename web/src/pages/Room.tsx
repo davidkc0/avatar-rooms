@@ -637,7 +637,7 @@ function Room() {
             modelName="arcade_machine.glb"
             position={new Vector3(0, 0.01, 7.5)}
             rotation={new Vector3(0, Math.PI, 0)}
-            scale={new Vector3(0.015, 0.015, 0.015)}
+            scale={new Vector3(-0.015, 0.015, 0.015)}
           />
           <ArcadeButton
             onToggleGame={handleToggleGameMode}

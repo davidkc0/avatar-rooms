@@ -220,3 +220,4 @@ export async function submitScore(
 export async function getLeaderboard(): Promise<LeaderboardState> {
   return await getLeaderboardState();
 }
+

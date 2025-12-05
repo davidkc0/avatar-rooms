@@ -291,3 +291,4 @@ export function SnakeGameCanvas({
 
   return null;
 }
+
