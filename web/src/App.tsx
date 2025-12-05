@@ -2,6 +2,7 @@ import { BrowserRouter, Route, Routes, useNavigate, useLocation } from 'react-ro
 import { useEffect } from 'react';
 import Lobby from './pages/Lobby';
 import Room from './pages/Room';
+import SnakeTest from './pages/SnakeTest';
 // @ts-ignore - Package types may not be available until installed
 import { AvatarCreator } from '@readyplayerme/react-avatar-creator';
 import { getRandomExpression } from './utils/helpers';
@@ -70,6 +71,7 @@ function App() {
             <Route path="/" element={<Lobby />} />
             <Route path="/avatar/:slug" element={<AvatarCreatorWrapper />} />
             <Route path="/rooms/:slug" element={<Room />} />
+            <Route path="/snake" element={<SnakeTest />} />
           </Routes>
         </main>
       </div>

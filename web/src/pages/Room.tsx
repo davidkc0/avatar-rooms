@@ -7,6 +7,8 @@ import { Walls } from '../world/Walls';
 import { Whiteboard } from '../world/Whiteboard';
 import { WhiteboardButton } from '../world/WhiteboardButton';
 import { WhiteboardCanvas } from '../components/WhiteboardCanvas';
+import { ArcadeButton } from '../world/ArcadeButton';
+import { SnakeGameCanvas } from '../games/snake/SnakeGameCanvas';
 import { Furniture } from '../world/Furniture';
 import { Vector3 } from '@babylonjs/core';
 import { AbstractMesh, DynamicTexture } from '@babylonjs/core';
@@ -25,15 +27,18 @@ import { quantizeBlend } from '../multiplayer/netloop';
 import { useKeyboardMovement, useJoystickMovement, type MovementInput } from '../state/movement';
 import { VoiceChat } from '../components/VoiceChat';
 import { Joystick } from '../components/Joystick';
+import { getMyId } from '../multiplayer/playroom';
+import { subscribeLeaderboard, submitScore, type LeaderboardState } from '../multiplayer/gameSync';
 import '../utils/helpers'; // Import to ensure hashCode is available
 
 type LocalUiState = {
   cameraOn: boolean;
   faceBlur: boolean;
   drawingMode: boolean;
+  gameMode: boolean;
 };
 
-const initialUi: LocalUiState = { cameraOn: true, faceBlur: false, drawingMode: false };
+const initialUi: LocalUiState = { cameraOn: true, faceBlur: false, drawingMode: false, gameMode: false };
 
 const createFallbackPlayer = (): PlayerState => ({
   pos: { x: 0, y: 0, z: 0 },
@@ -64,12 +69,18 @@ function Room() {
   const mountedRef = useRef(true);
   const [whiteboardMesh, setWhiteboardMesh] = useState<AbstractMesh | null>(null);
   const drawingModeRef = useRef(false);
+  const gameModeRef = useRef(false);
   const whiteboardTextureRef = useRef<DynamicTexture | null>(null);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardState>({ scores: [], version: 0 });
   
-  // Update ref when drawing mode changes
+  // Update refs when modes change
   useEffect(() => {
     drawingModeRef.current = ui.drawingMode;
   }, [ui.drawingMode]);
+
+  useEffect(() => {
+    gameModeRef.current = ui.gameMode;
+  }, [ui.gameMode]);
 
   // Stable callbacks for whiteboard
   const handleExitDrawingMode = useCallback(() => {
@@ -85,17 +96,52 @@ function Room() {
     console.log('[Room] Texture updated, forcing material refresh');
   }, []);
 
+  // Game mode handlers
+  const handleToggleGameMode = useCallback(() => {
+    setUi(prev => ({ ...prev, gameMode: !prev.gameMode }));
+  }, []);
+
+  const handleExitGameMode = useCallback(() => {
+    setUi(prev => ({ ...prev, gameMode: false }));
+  }, []);
+
+  const handleGameOver = useCallback(async (score: number) => {
+    const myId = getMyId();
+    if (!myId) {
+      console.warn('[Room] Cannot submit score: no player ID');
+      return;
+    }
+
+    // Get player name (use a default if not available)
+    const playerName = 'Player'; // TODO: Get actual player name from Playroomkit
+    
+    try {
+      await submitScore(score, playerName, myId);
+      console.log('[Room] Score submitted:', score);
+    } catch (error) {
+      console.error('[Room] Failed to submit score', error);
+    }
+  }, []);
+
+  // Subscribe to leaderboard updates
+  useEffect(() => {
+    const unsubscribe = subscribeLeaderboard((state) => {
+      setLeaderboard(state);
+    });
+    return unsubscribe;
+  }, []);
+
   // Combine keyboard and joystick input (joystick takes priority)
-  // Disable movement when in drawing mode
+  // Disable movement when in drawing mode or game mode
   const movementInput: MovementInput = useMemo(() => {
-    if (ui.drawingMode) {
-      return { forward: 0, right: 0 }; // No movement in drawing mode
+    if (ui.drawingMode || ui.gameMode) {
+      return { forward: 0, right: 0 }; // No movement in drawing/game mode
     }
     if (joystickInput.forward !== 0 || joystickInput.right !== 0) {
       return joystickInput;
     }
     return keyboardInput;
-  }, [keyboardInput, joystickInput, ui.drawingMode]);
+  }, [keyboardInput, joystickInput, ui.drawingMode, ui.gameMode]);
 
   useEffect(() => {
     worldRef.current = world;
@@ -336,7 +382,7 @@ function Room() {
       }
     };
     
-    if (ui.drawingMode) {
+    if (ui.drawingMode || ui.gameMode) {
       window.addEventListener('keydown', handleKeyDown, true); // Use capture phase
       return () => {
         window.removeEventListener('keydown', handleKeyDown, true);
@@ -484,9 +530,9 @@ function Room() {
     useEffect(() => {
       if (myId === 'none' || !camera) return;
       
-      // Handle drawing mode - just disable camera controls (no zoom needed with full-screen overlay)
-      if (ui.drawingMode) {
-        // Disable camera controls in drawing mode
+      // Handle drawing mode or game mode - disable camera controls
+      if (ui.drawingMode || ui.gameMode) {
+        // Disable camera controls in drawing/game mode
         camera.detachControl();
         return;
       }
@@ -589,9 +635,13 @@ function Room() {
           <Furniture
             modelPath="/"
             modelName="arcade_machine.glb"
-            position={new Vector3(0, 0, 8)}
+            position={new Vector3(0, 0.01, 7.5)}
             rotation={new Vector3(0, Math.PI, 0)}
             scale={new Vector3(0.015, 0.015, 0.015)}
+          />
+          <ArcadeButton
+            onToggleGame={handleToggleGameMode}
+            isGameMode={ui.gameMode}
           />
           {whiteboardMesh && (
             <>
@@ -651,6 +701,30 @@ function Room() {
           )}
         </SceneRoot>
         <Joystick />
+        {ui.gameMode && (
+          <SnakeGameCanvas
+            gameMode={ui.gameMode}
+            onExitGame={handleExitGameMode}
+            onGameOver={handleGameOver}
+          />
+        )}
+        {ui.gameMode && leaderboard.scores.length > 0 && (
+          <div className="fixed top-4 right-4 bg-black/80 text-white p-4 rounded-lg max-w-xs z-[10000] pointer-events-auto">
+            <h3 className="text-lg font-bold mb-2">Leaderboard</h3>
+            <div className="space-y-1 max-h-64 overflow-y-auto">
+              {leaderboard.scores.slice(0, 10).map((score, index) => (
+                <div
+                  key={`${score.playerId}-${score.timestamp}`}
+                  className="flex justify-between text-sm"
+                >
+                  <span className="text-gray-300">#{index + 1}</span>
+                  <span className="flex-1 mx-2 truncate">{score.playerName}</span>
+                  <span className="font-semibold">{score.score}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -58,17 +58,24 @@ export function Furniture({
           rootMesh.checkCollisions = true;
 
           // Fix blinking/z-fighting issues
-          rootMesh.renderingGroupId = 1; // Put in separate rendering group
+          // Use renderingGroupId 0 (same as walls) so furniture renders behind avatars
+          rootMesh.renderingGroupId = 0;
           
           // Configure all meshes with zOffset and pre-compile shaders
           const materialPromises: Promise<any>[] = [];
           result.meshes.forEach(mesh => {
-            mesh.renderingGroupId = 1;
+            mesh.renderingGroupId = 0; // Render with background objects, not in front
             // Apply zOffset to materials to prevent z-fighting
             if (mesh.material) {
               const material = mesh.material as any;
-              material.zOffset = 0.1; // Push mesh forward in depth buffer
+              material.zOffset = 1.0; // Much higher zOffset to prevent z-fighting
               material.backFaceCulling = false; // Disable back face culling
+              // Mark material as always active to prevent flickering
+              material.needDepthPrePass = true;
+              // Ensure proper depth testing
+              material.disableDepthWrite = false;
+              // Force material to be marked as dirty to ensure updates
+              material.markAsDirty();
               // Pre-compile shader to prevent flickering during initial rendering
               if (material.forceCompilationAsync) {
                 materialPromises.push(
