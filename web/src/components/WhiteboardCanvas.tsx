@@ -95,7 +95,9 @@ export function WhiteboardCanvas({
   const handleDone = () => {
     // Save any pending stroke
     if (currentStrokeRef.current && currentStrokeRef.current.points.length >= 2) {
-      broadcastStroke(currentStrokeRef.current);
+      broadcastStroke(currentStrokeRef.current).catch((error) => {
+        console.error('[WhiteboardCanvas] Failed to broadcast stroke in handleDone', error);
+      });
       currentStrokeRef.current = null;
     }
     

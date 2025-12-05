@@ -132,14 +132,22 @@ export function Whiteboard({ whiteboardMesh, drawingMode, onExitDrawingMode, tex
   useEffect(() => {
     if (!isInitialized || !textureRef.current) return;
 
+    console.log('[Whiteboard] Subscribing to whiteboard state changes');
+    
     const unsubscribe = subscribeWhiteboardState((state) => {
-      if (!textureRef.current) return;
+      if (!textureRef.current) {
+        console.warn('[Whiteboard] Texture ref is null, skipping state update');
+        return;
+      }
 
       try {
+        console.log('[Whiteboard] Received state update with', state.strokes.length, 'strokes');
+        
         const ctx = textureRef.current.getContext();
         ctx.fillStyle = '#f5f5f0';
         ctx.fillRect(0, 0, TEXTURE_SIZE, TEXTURE_SIZE);
 
+        // Replay all strokes in order
         state.strokes.forEach((stroke) => {
           if (stroke.points.length === 0) return;
           ctx.beginPath();
@@ -157,6 +165,12 @@ export function Whiteboard({ whiteboardMesh, drawingMode, onExitDrawingMode, tex
         });
 
         textureRef.current.update();
+        
+        // Force internal texture update
+        const internalTexture = textureRef.current.getInternalTexture();
+        if (internalTexture && typeof internalTexture.update === 'function') {
+          internalTexture.update();
+        }
         
         // Apply texture after updating (with delay to avoid race conditions)
         setTimeout(() => {

@@ -6,6 +6,8 @@ import {
   VideoTexture,
   Color3,
   AbstractMesh,
+  ActionManager,
+  ExecuteCodeAction,
 } from '@babylonjs/core';
 import { MeshBuilder } from '@babylonjs/core/Meshes';
 import { useCallback, useEffect, useRef, memo, useState } from 'react';
@@ -22,6 +24,7 @@ type AvatarProps = {
   isLocal?: boolean;
   videoElement?: HTMLVideoElement;
   getLocalState?: () => PlayerState | null;
+  onAvatarClick?: (playerId: string) => void;
 };
 
 const INTERPOLATION_TIME = 0.12; // 120ms
@@ -34,7 +37,7 @@ type InterpolatedState = {
 
 type AvatarInstance = SimpleAvatar | (RpmAvatar & { kind?: 'rpm' });
 
-function AvatarComponent({ playerId, player, isLocal = false, videoElement, getLocalState }: AvatarProps) {
+function AvatarComponent({ playerId, player, isLocal = false, videoElement, getLocalState, onAvatarClick }: AvatarProps) {
   const { scene } = useScene();
   const avatarRef = useRef<AvatarInstance | null>(null);
   const playerStateRef = useRef(player);
@@ -44,6 +47,12 @@ function AvatarComponent({ playerId, player, isLocal = false, videoElement, getL
   const [avatarReady, setAvatarReady] = useState(false);
   const remoteVideoElement = useVideoStore((state) => state.remoteVideos[playerId]);
   const effectiveVideoElement = isLocal ? videoElement : remoteVideoElement;
+  const clickCallbackRef = useRef(onAvatarClick);
+  
+  // Update callback ref when it changes
+  useEffect(() => {
+    clickCallbackRef.current = onAvatarClick;
+  }, [onAvatarClick]);
   
   // Debug logging for remote video lookup
   useEffect(() => {
@@ -191,6 +200,51 @@ function AvatarComponent({ playerId, player, isLocal = false, videoElement, getL
         avatarRef.current = avatar;
         setAvatarReady(true); // Signal that avatar is ready!
         console.log('[Avatar] Avatar created for player:', playerId, 'isRPM:', !!(player.avatarUrl && (avatar as any).kind === 'rpm'));
+
+        // Add click detection for non-local avatars
+        if (!isLocal && onAvatarClick) {
+          // Make all meshes in the avatar pickable for better click detection
+          const allMeshes: AbstractMesh[] = [];
+          
+          if (avatar.root instanceof AbstractMesh) {
+            allMeshes.push(avatar.root);
+          }
+          
+          // Get all child meshes recursively
+          const getChildMeshes = (node: any): void => {
+            const children = node.getChildMeshes ? node.getChildMeshes(false) : [];
+            children.forEach((child: any) => {
+              if (child instanceof AbstractMesh) {
+                allMeshes.push(child);
+              }
+              getChildMeshes(child);
+            });
+          };
+          
+          getChildMeshes(avatar.root);
+          
+          // Make all meshes pickable and add click handlers
+          allMeshes.forEach((mesh) => {
+            mesh.isPickable = true;
+            const actionManager = new ActionManager(scene);
+            mesh.actionManager = actionManager;
+            
+            actionManager.registerAction(
+              new ExecuteCodeAction(ActionManager.OnPickDownTrigger, (evt) => {
+                evt.sourceEvent?.stopPropagation?.();
+                evt.sourceEvent?.preventDefault?.();
+                console.log('[Avatar] Avatar clicked:', playerId, 'mesh:', mesh.name);
+                if (clickCallbackRef.current) {
+                  clickCallbackRef.current(playerId);
+                } else {
+                  console.warn('[Avatar] No click callback registered for player:', playerId);
+                }
+              })
+            );
+          });
+          
+          console.log(`[Avatar] Made ${allMeshes.length} meshes pickable for player:`, playerId);
+        }
 
         if (video && (avatar as any).head) {
           createCameraFacePlane((avatar as any).head, video);

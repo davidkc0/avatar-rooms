@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
 import { useScene } from './scene';
 import { SceneLoader } from '@babylonjs/core/Loading/sceneLoader';
 import '@babylonjs/loaders';
@@ -21,6 +21,11 @@ export function Furniture({
 }: FurnitureProps) {
   const { scene } = useScene();
   const loadedMeshesRef = useRef<AbstractMesh[]>([]);
+  
+  // Memoize Vector3 values to prevent infinite re-renders
+  const positionKey = useMemo(() => `${position.x},${position.y},${position.z}`, [position.x, position.y, position.z]);
+  const rotationKey = useMemo(() => `${rotation.x},${rotation.y},${rotation.z}`, [rotation.x, rotation.y, rotation.z]);
+  const scaleKey = useMemo(() => `${scale.x},${scale.y},${scale.z}`, [scale.x, scale.y, scale.z]);
 
   useEffect(() => {
     if (!scene) return;
@@ -110,7 +115,21 @@ export function Furniture({
       });
       loadedMeshesRef.current = [];
     };
-  }, [scene, modelPath, modelName, position, rotation, scale]);
+  }, [scene, modelPath, modelName, positionKey, rotationKey, scaleKey]);
+  
+  // Separate effect to update position/rotation/scale when they change (without reloading)
+  useEffect(() => {
+    if (loadedMeshesRef.current.length === 0) return;
+    
+    const rootMesh = loadedMeshesRef.current[0];
+    if (rootMesh && !rootMesh.isDisposed()) {
+      // Use current props (captured in closure) - only runs when keys change
+      rootMesh.position.copyFrom(position);
+      rootMesh.rotation.copyFrom(rotation);
+      rootMesh.scaling.copyFrom(scale);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [positionKey, rotationKey, scaleKey]);
 
   return null;
 }

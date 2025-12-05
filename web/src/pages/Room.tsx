@@ -29,6 +29,10 @@ import { VoiceChat } from '../components/VoiceChat';
 import { Joystick } from '../components/Joystick';
 import { getMyId } from '../multiplayer/playroom';
 import { subscribeLeaderboard, submitScore, type LeaderboardState } from '../multiplayer/gameSync';
+import { AvatarProfileModal } from '../components/AvatarProfileModal';
+import { worldToScreen } from '../utils/worldToScreen';
+import { getPlayerProfile } from '../utils/getPlayerProfile';
+import type { PlayerProfile } from '../types/playerProfile';
 import '../utils/helpers'; // Import to ensure hashCode is available
 
 type LocalUiState = {
@@ -72,6 +76,9 @@ function Room() {
   const gameModeRef = useRef(false);
   const whiteboardTextureRef = useRef<DynamicTexture | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardState>({ scores: [], version: 0 });
+  const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
+  const [modalScreenPosition, setModalScreenPosition] = useState<{ x: number; y: number } | null>(null);
+  const [playerProfile, setPlayerProfile] = useState<PlayerProfile | null>(null);
   
   // Update refs when modes change
   useEffect(() => {
@@ -130,6 +137,103 @@ function Room() {
     });
     return unsubscribe;
   }, []);
+
+  // Handle avatar click
+  const handleAvatarClick = useCallback((playerId: string) => {
+    console.log('[Room] handleAvatarClick called for player:', playerId, 'myId:', myId, 'drawingMode:', ui.drawingMode, 'gameMode:', ui.gameMode);
+    // Don't open modal for local player or when in drawing/game mode
+    if (playerId === myId) {
+      console.log('[Room] Ignoring click on local player');
+      return;
+    }
+    if (ui.drawingMode || ui.gameMode) {
+      console.log('[Room] Ignoring click - in drawing or game mode');
+      return;
+    }
+    console.log('[Room] Opening profile modal for player:', playerId);
+    setSelectedPlayerId(playerId);
+  }, [myId, ui.drawingMode, ui.gameMode]);
+
+  // Handle modal close
+  const handleCloseModal = useCallback(() => {
+    setSelectedPlayerId(null);
+    setModalScreenPosition(null);
+    setPlayerProfile(null);
+  }, []);
+
+  // Fetch profile when selected player changes
+  useEffect(() => {
+    if (!selectedPlayerId) {
+      setPlayerProfile(null);
+      return;
+    }
+
+    let cancelled = false;
+    getPlayerProfile(selectedPlayerId).then((profile) => {
+      if (!cancelled) {
+        setPlayerProfile(profile);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPlayerId]);
+
+  // Component to update modal position (must be inside SceneRoot to access scene/camera)
+  const ModalPositionUpdater = () => {
+    const { scene, camera } = useScene();
+    
+    useEffect(() => {
+      if (!selectedPlayerId || !camera) {
+        setModalScreenPosition(null);
+        return;
+      }
+
+      // Don't update position when in drawing/game mode
+      if (ui.drawingMode || ui.gameMode) {
+        setModalScreenPosition(null);
+        return;
+      }
+
+      const updatePosition = () => {
+        const player = world.players[selectedPlayerId];
+        if (!player) {
+          setModalScreenPosition(null);
+          return;
+        }
+
+        // Get avatar position (add height offset for head position)
+        const worldPos = new Vector3(
+          player.pos.x,
+          player.pos.y + 2, // Approximate head height
+          player.pos.z
+        );
+
+        const screenCoords = worldToScreen(worldPos, scene, camera);
+        if (screenCoords) {
+          setModalScreenPosition({ x: screenCoords.x, y: screenCoords.y });
+        } else {
+          // Avatar is behind camera or off-screen
+          setModalScreenPosition(null);
+        }
+      };
+
+      // Update position on each render frame
+      const observer = scene.onBeforeRenderObservable.add(() => {
+        updatePosition();
+      });
+
+      // Initial update
+      updatePosition();
+
+      return () => {
+        scene.onBeforeRenderObservable.remove(observer);
+      };
+    }, [selectedPlayerId, world.players, scene, camera, ui.drawingMode, ui.gameMode]);
+
+    return null;
+  };
 
   // Combine keyboard and joystick input (joystick takes priority)
   // Disable movement when in drawing mode or game mode
@@ -668,6 +772,7 @@ function Room() {
             </>
           )}
           <CameraFollow />
+          <ModalPositionUpdater />
           <PlayerController 
             myId={myId}
             movementInput={movementInput}
@@ -684,6 +789,7 @@ function Room() {
                   isLocal={id === myId}
                   videoElement={id === myId && ui.cameraOn ? videoRef.current || undefined : undefined}
                   getLocalState={id === myId ? () => localPlayerStateRef.current : undefined}
+                  onAvatarClick={handleAvatarClick}
                 />
               );
             })
@@ -696,6 +802,7 @@ function Room() {
                 isLocal={true}
                 videoElement={ui.cameraOn ? videoRef.current || undefined : undefined}
                 getLocalState={() => localPlayerStateRef.current}
+                onAvatarClick={handleAvatarClick}
               />
             )
           )}
@@ -723,7 +830,15 @@ function Room() {
                 </div>
               ))}
             </div>
-          </div>
+            </div>
+          )}
+        {selectedPlayerId && !ui.drawingMode && !ui.gameMode && (
+          <AvatarProfileModal
+            playerId={selectedPlayerId}
+            screenPosition={modalScreenPosition}
+            onClose={handleCloseModal}
+            profile={playerProfile}
+          />
         )}
       </div>
     </div>
